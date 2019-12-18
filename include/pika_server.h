@@ -191,11 +191,15 @@ class PikaServer {
   bool AllPartitionConnectSuccess();
   bool LoopPartitionStateMachine();
   void SetLoopPartitionStateMachine(bool need_loop);
+  /*
+   * ThreadPool Process Task with Lock
+   */
+  void ScheduleLocked(pink::TaskFunc func, pink::TaskArg* arg);
 
   /*
    * ThreadPool Process Task
    */
-  void Schedule(pink::TaskFunc func, void* arg);
+  void Schedule(pink::TaskFunc func, pink::TaskArg* arg);
 
   /*
    * BGSave used
@@ -293,6 +297,8 @@ class PikaServer {
                       std::vector<std::string>* result);
   void PubSubNumSub(const std::vector<std::string>& channels,
                     std::vector<std::pair<std::string, int>>* result);
+
+  pink::ThreadPool* GetThreadPool() { return pika_thread_pool_; }
 
   friend class Cmd;
   friend class InfoCmd;

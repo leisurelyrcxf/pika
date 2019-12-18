@@ -14,7 +14,7 @@
 #include "include/pika_repl_bgworker.h"
 #include "include/pika_repl_server_thread.h"
 
-struct ReplServerTaskArg {
+struct ReplServerTaskArg : public pink::TaskArg {
   std::shared_ptr<InnerMessage::InnerRequest> req;
   std::shared_ptr<pink::PbConn> conn;
   ReplServerTaskArg(std::shared_ptr<InnerMessage::InnerRequest> _req, std::shared_ptr<pink::PbConn> _conn)
@@ -33,7 +33,7 @@ class PikaReplServer {
   void BuildBinlogSyncResp(const std::vector<WriteTask>& tasks, InnerMessage::InnerResponse* resp);
   slash::Status Write(const std::string& ip, const int port, const std::string& msg);
 
-  void Schedule(pink::TaskFunc func, void* arg);
+  void Schedule(pink::TaskFunc func, pink::TaskArg* arg);
   void UpdateClientConnMap(const std::string& ip_port, int fd);
   void RemoveClientConn(int fd);
   void KillAllConns();

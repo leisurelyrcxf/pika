@@ -122,7 +122,7 @@ slash::Status PikaReplServer::Write(const std::string& ip,
   return Status::OK();
 }
 
-void PikaReplServer::Schedule(pink::TaskFunc func, void* arg){
+void PikaReplServer::Schedule(pink::TaskFunc func, pink::TaskArg* arg) {
   server_tp_->Schedule(func, arg);
 }
 

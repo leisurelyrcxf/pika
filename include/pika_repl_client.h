@@ -47,7 +47,7 @@ struct ReplClientWriteBinlogTaskArg {
       res_private_data(_res_private_data), worker(_worker) {}
 };
 
-struct ReplClientWriteDBTaskArg {
+struct ReplClientWriteDBTaskArg : public pink::TaskArg {
   PikaCmdArgsType* argv;
   BinlogItem* binlog_item;
   std::string table_name;

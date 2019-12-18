@@ -7,10 +7,12 @@
 #define PIKA_CLIENT_CONN_H_
 
 #include "include/pika_command.h"
+#include "include/pika_cache.h"
+#include "pink/include/thread_pool.h"
 
 class PikaClientConn: public pink::RedisConn {
  public:
-  struct BgTaskArg {
+  struct BgTaskArg: public pink::TaskArg {
     std::shared_ptr<PikaClientConn> pcc;
     std::vector<pink::RedisCmdArgsType> redis_cmds;
     std::string* response;
@@ -30,6 +32,8 @@ class PikaClientConn: public pink::RedisConn {
     };
     StatType stat_;
   };
+
+  static Cache<BgTaskArg> cache_;
 
   PikaClientConn(int fd, std::string ip_port,
                  pink::Thread *server_thread,

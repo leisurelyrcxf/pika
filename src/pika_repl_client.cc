@@ -90,7 +90,7 @@ void PikaReplClient::ScheduleWriteDBTask(const std::string& dispatch_key,
     const std::string& table_name, uint32_t partition_id) {
   ReplClientWriteDBTaskArg* task_arg =
     new ReplClientWriteDBTaskArg(argv, binlog_item, table_name, partition_id);
-  pool_->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteDB, static_cast<void*>(task_arg));
+  pool_->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteDB, task_arg);
 }
 
 size_t PikaReplClient::GetHashIndex(std::string key, bool upper_half) {

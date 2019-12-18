@@ -851,7 +851,11 @@ void PikaServer::SetLoopPartitionStateMachine(bool need_loop) {
   loop_partition_state_machine_ = need_loop;
 }
 
-void PikaServer::Schedule(pink::TaskFunc func, void* arg) {
+void PikaServer::ScheduleLocked(pink::TaskFunc func, pink::TaskArg* arg) {
+  pika_thread_pool_->ScheduleLocked(func, arg);
+}
+
+void PikaServer::Schedule(pink::TaskFunc func, pink::TaskArg* arg) {
   pika_thread_pool_->Schedule(func, arg);
 }
 

@@ -18,6 +18,8 @@ extern PikaConf* g_pika_conf;
 extern PikaServer* g_pika_server;
 extern PikaCmdTableManager* g_pika_cmd_table_manager;
 
+Cache<PikaClientConn::BgTaskArg> PikaClientConn::cache_{65535};
+
 PikaClientConn::PikaClientConn(int fd, std::string ip_port,
                                pink::Thread* thread,
                                pink::PinkEpoll* pink_epoll,
@@ -148,11 +150,16 @@ void PikaClientConn::ProcessMonitor(const PikaCmdArgsType& argv) {
 }
 
 void PikaClientConn::AsynProcessRedisCmds(const std::vector<pink::RedisCmdArgsType>& argvs, std::string* response) {
-  BgTaskArg* arg = new BgTaskArg();
+  g_pika_server->GetThreadPool()->get_mutex().Lock();
+  BgTaskArg* arg = cache_.get();
+  if (arg == nullptr) {
+	arg = new BgTaskArg();
+  }
   arg->redis_cmds = argvs;
   arg->response = response;
   arg->pcc = std::dynamic_pointer_cast<PikaClientConn>(shared_from_this());
-  g_pika_server->Schedule(&DoBackgroundTask, arg);
+  g_pika_server->ScheduleLocked(&DoBackgroundTask, arg);
+  g_pika_server->GetThreadPool()->get_mutex().Unlock();
 }
 
 void PikaClientConn::BatchExecRedisCmd(const std::vector<pink::RedisCmdArgsType>& argvs, std::string* response) {
@@ -193,7 +200,9 @@ int PikaClientConn::DealMessage(const PikaCmdArgsType& argv, std::string* respon
 void PikaClientConn::DoBackgroundTask(void* arg) {
   BgTaskArg* bg_arg = reinterpret_cast<BgTaskArg*>(arg);
   bg_arg->pcc->BatchExecRedisCmd(bg_arg->redis_cmds, bg_arg->response);
-  delete bg_arg;
+  if (bg_arg->owner == nullptr) {
+    delete bg_arg;
+  }
 }
 
 // Initial permission status

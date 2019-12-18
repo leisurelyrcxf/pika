@@ -849,7 +849,7 @@ void PikaReplicaManager::DropItemInWriteQueue(const std::string& ip, int port) {
 }
 
 void PikaReplicaManager::ScheduleReplServerBGTask(pink::TaskFunc func, void* arg) {
-  pika_repl_server_->Schedule(func, arg);
+  pika_repl_server_->Schedule(func, static_cast<pink::TaskArg*>(arg));
 }
 
 void PikaReplicaManager::ScheduleReplClientBGTask(pink::TaskFunc func, void* arg) {
