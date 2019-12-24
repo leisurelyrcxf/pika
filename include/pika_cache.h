@@ -68,6 +68,8 @@ public:
   void gc(pink::TaskArg* ele) override {
     assert(ele->owner == this);
     assert(contains(ele));
-    put(static_cast<T*>(ele));
+    T* e = static_cast<T*>(ele);
+    e->reset();
+    put(e);
   }
 };

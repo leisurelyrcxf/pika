@@ -16,6 +16,7 @@ class PikaClientConn: public pink::RedisConn {
     std::shared_ptr<PikaClientConn> pcc;
     std::vector<pink::RedisCmdArgsType> redis_cmds;
     std::string* response;
+    void reset() { pcc = nullptr; }
   };
 
   // Auth related
