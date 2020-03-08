@@ -186,21 +186,38 @@ int PikaReplBgWorker::HandleWriteBinlog(pink::RedisParser* parser, const pink::R
   std::shared_ptr<Partition> partition = g_pika_server->GetTablePartitionById(worker->table_name_, worker->partition_id_);
   std::shared_ptr<Binlog> logger = partition->logger();
 
+  std::string dispatch_key = argv.size() >= 2 ? argv[1] : argv[0];
+  std::shared_ptr<Partition> ought_partition = g_pika_server->GetTablePartitionByKey(worker->table_name_, dispatch_key);
+  assert(ought_partition != nullptr);
+
   logger->Lock();
-  logger->Put(c_ptr->ToBinlog(binlog_item.exec_time(),
-                              std::to_string(binlog_item.server_id()),
-                              binlog_item.logic_id(),
-                              binlog_item.filenum(),
-                              binlog_item.offset()));
-  uint32_t filenum;
-  uint64_t offset;
-  logger->GetProducerStatus(&filenum, &offset);
+  if (ought_partition == partition) {
+    logger->Put(c_ptr->ToBinlog(binlog_item.exec_time(),
+                                std::to_string(binlog_item.server_id()),
+                                binlog_item.logic_id(),
+                                binlog_item.filenum(),
+                                binlog_item.offset()));
+  } else {
+    // use void log to occupy that position
+    std::shared_ptr<Cmd> v_ptr = g_pika_cmd_table_manager->GetCmd(kCmdNameVoid);
+    assert(v_ptr != nullptr);
+    logger->Put(v_ptr->ToBinlog(binlog_item.exec_time(),
+                                std::to_string(binlog_item.server_id()),
+                                binlog_item.logic_id(),
+                                binlog_item.filenum(),
+                                binlog_item.offset()));
+  }
+  // meaningless code
+//  uint32_t filenum;
+//  uint64_t offset;
+//  logger->GetProducerStatus(&filenum, &offset);
   logger->Unlock();
 
-  PikaCmdArgsType *v = new PikaCmdArgsType(argv);
-  BinlogItem *b = new BinlogItem(binlog_item);
-  std::string dispatch_key = argv.size() >= 2 ? argv[1] : argv[0];
-  g_pika_rm->ScheduleWriteDBTask(dispatch_key, v, b, worker->table_name_, worker->partition_id_);
+  if (ought_partition == partition) {
+    PikaCmdArgsType *v = new PikaCmdArgsType(argv);
+    BinlogItem *b = new BinlogItem(binlog_item);
+    g_pika_rm->ScheduleWriteDBTask(dispatch_key, v, b, worker->table_name_, worker->partition_id_);
+  }
   return 0;
 }
 

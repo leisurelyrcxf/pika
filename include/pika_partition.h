@@ -79,8 +79,8 @@ class Partition : public std::enable_shared_from_this<Partition> {
   bool SetBinlogOffset(const BinlogOffset& boffset);
 
   void PrepareRsync();
-  bool TryUpdateMasterOffset();
-  bool ChangeDb(const std::string& new_path);
+  bool TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_ptr<blackwidow::BlackWidow> db)> onDbChanged);
+  bool ChangeDb(const std::string& new_path, std::function<rocksdb::Status(std::shared_ptr<blackwidow::BlackWidow> db)> onDbChanged);
 
   void Leave();
   void Close();

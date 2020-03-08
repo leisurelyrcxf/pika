@@ -18,6 +18,7 @@
 #include "include/pika_hyperloglog.h"
 #include "include/pika_slot.h"
 #include "include/pika_cluster.h"
+#include "include/pika_void.h"
 
 extern PikaServer* g_pika_server;
 
@@ -492,6 +493,9 @@ void InitCmdTable(std::unordered_map<std::string, Cmd*> *cmd_table) {
   ////PubSub
   Cmd * pubsubptr = new PubSubCmd(kCmdNamePubSub, -2, kCmdFlagsRead | kCmdFlagsPubSub);
   cmd_table->insert(std::pair<std::string, Cmd*>(kCmdNamePubSub, pubsubptr));
+  //Void
+  Cmd * voidCmd = new VoidCmd(kCmdNameVoid, 0, kCmdFlagsRead);
+  cmd_table->insert(std::pair<std::string, Cmd*>(kCmdNameVoid, voidCmd));
 }
 
 Cmd* GetCmdFromTable(const std::string& opt, const CmdTable& cmd_table) {

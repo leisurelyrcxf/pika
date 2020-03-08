@@ -111,7 +111,7 @@ class SyncPartition {
 class SyncMasterPartition : public SyncPartition {
  public:
   SyncMasterPartition(const std::string& table_name, uint32_t partition_id);
-  Status AddSlaveNode(const std::string& ip, int port, int session_id);
+  Status AddSlaveNode(const std::string& ip, int port, uint32_t partition_id, int session_id);
   Status RemoveSlaveNode(const std::string& ip, int port);
 
   Status ActivateSlaveBinlogSync(const std::string& ip, int port, const std::shared_ptr<Binlog> binlog, const BinlogOffset& offset);
@@ -344,6 +344,7 @@ class PikaReplicaManager {
 
  private:
   void InitPartition();
+  std::shared_ptr<SyncMasterPartition> getSyncMasterPartitionByNameLocked(const PartitionInfo& p_info);
 
   pthread_rwlock_t partitions_rw_;
   std::unordered_map<PartitionInfo, std::shared_ptr<SyncMasterPartition>, hash_partition_info> sync_master_partitions_;

@@ -358,6 +358,7 @@ void PikaReplServerConn::HandleBinlogSyncRequest(void* arg) {
     return;
   }
   delete task_arg;
+  // seems to be a bug?
   g_pika_server->SignalAuxiliary();
   return;
 }

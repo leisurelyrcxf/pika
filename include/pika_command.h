@@ -208,6 +208,9 @@ const std::string kCmdNamePkClusterAddSlots = "pkclusteraddslots";
 const std::string kCmdNamePkClusterDelSlots = "pkclusterdelslots";
 const std::string kCmdNamePkClusterSlotsSlaveof = "pkclusterslotsslaveof";
 
+//void
+const std::string kCmdNameVoid = "void";
+
 const std::string kClusterPrefix = "pkcluster";
 typedef pink::RedisCmdArgsType PikaCmdArgsType;
 static const int RAW_ARGS_LEN = 1024 * 1024; 
