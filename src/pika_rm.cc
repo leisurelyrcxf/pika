@@ -619,7 +619,8 @@ SyncSlavePartition::SyncSlavePartition(const std::string& table_name,
   : SyncPartition(table_name, partition_id),
     m_info_(),
     repl_state_(kNoConnect),
-    local_ip_("") {
+    local_ip_(""),
+    resharding_(false) {
   m_info_.SetLastRecvTime(slash::NowMicros());
 }
 
@@ -1236,7 +1237,8 @@ Status PikaReplicaManager::SelectLocalIp(const std::string& remote_ip,
 }
 
 Status PikaReplicaManager::ActivateSyncSlavePartition(const RmNode& node,
-                                                      const ReplState& repl_state) {
+                                                      const ReplState& repl_state,
+                                                      bool resharding) {
   slash::RWLock l(&partitions_rw_, false);
   const PartitionInfo& p_info = node.NodePartitionInfo();
   if (sync_slave_partitions_.find(p_info) == sync_slave_partitions_.end()) {
@@ -1251,6 +1253,7 @@ Status PikaReplicaManager::ActivateSyncSlavePartition(const RmNode& node,
   if (s.ok()) {
     sync_slave_partitions_[p_info]->SetLocalIp(local_ip);
     sync_slave_partitions_[p_info]->Activate(node, repl_state);
+    sync_slave_partitions_[p_info]->SetResharding(resharding);
   }
   return s;
 }
@@ -1510,12 +1513,17 @@ Status PikaReplicaManager::RunSyncSlavePartitionStateMachine() {
       std::shared_ptr<Partition> partition =
           g_pika_server->GetTablePartitionById(p_info.table_name_, p_info.partition_id_);
       if (partition) {
-        partition->TryUpdateMasterOffset([partition](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
-           return db->RemoveKeys(blackwidow::DataType::kAll, [partition](const rocksdb::Slice& key)->bool {
-             return partition  != g_pika_server->GetTablePartitionByKey(partition->GetTableName(),
-                 key.ToString(false));
-           });
-        });
+        auto onDbChanged = [partition](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
+          return rocksdb::Status::OK();
+        };
+        if (s_partition->Resharding()) {
+          onDbChanged = [partition](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
+            return db->RemoveKeys(blackwidow::DataType::kAll, [partition](const rocksdb::Slice& key)->bool {
+              return partition != g_pika_server->GetTablePartitionByKey(partition->GetTableName(), key.ToString(false));
+            });
+          };
+        }
+        (void) partition->TryUpdateMasterOffset(std::move(onDbChanged));
       } else {
         LOG(WARNING) << "Partition not found, Table Name: "
           << p_info.table_name_ << " Partition Id: " << p_info.partition_id_;

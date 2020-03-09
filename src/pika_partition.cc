@@ -314,7 +314,7 @@ bool Partition::TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_
   }
 
   slash::DeleteFile(info_path);
-  if (!ChangeDb(dbsync_path_, onDbChanged)) {
+  if (!ChangeDb(dbsync_path_, std::move(onDbChanged))) {
     LOG(WARNING) << "Partition: " << partition_name_
         << ", Failed to change db";
     slave_partition->SetReplState(ReplState::kError);

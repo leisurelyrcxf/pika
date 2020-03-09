@@ -207,12 +207,19 @@ class SyncSlavePartition : public SyncPartition {
   std::string LocalIp() {
     return local_ip_;
   }
+  void SetResharding(bool resharding) {
+    this->resharding_ = resharding;
+  }
+  bool Resharding() {
+    return resharding_;
+  }
 
  private:
   slash::Mutex partition_mu_;
   RmNode m_info_;
   ReplState repl_state_;
   std::string local_ip_;
+  bool resharding_;
 };
 
 class BinlogReaderManager {
@@ -242,7 +249,7 @@ class PikaReplicaManager {
   Status SelectLocalIp(const std::string& remote_ip,
                        const int remote_port,
                        std::string* const local_ip);
-  Status ActivateSyncSlavePartition(const RmNode& node, const ReplState& repl_state);
+  Status ActivateSyncSlavePartition(const RmNode& node, const ReplState& repl_state, bool resharding=false);
   Status UpdateSyncSlavePartitionSessionId(const PartitionInfo& p_info, int32_t session_id);
   Status DeactivateSyncSlavePartition(const PartitionInfo& p_info);
   Status SetSlaveReplState(const PartitionInfo& p_info, const ReplState& repl_state);
