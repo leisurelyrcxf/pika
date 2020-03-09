@@ -1513,17 +1513,17 @@ Status PikaReplicaManager::RunSyncSlavePartitionStateMachine() {
       std::shared_ptr<Partition> partition =
           g_pika_server->GetTablePartitionById(p_info.table_name_, p_info.partition_id_);
       if (partition) {
-        auto onDbChanged = [partition](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
-          return rocksdb::Status::OK();
-        };
-        if (s_partition->Resharding()) {
-          onDbChanged = [partition](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
+        if (!s_partition->Resharding()) {
+          (void) partition->TryUpdateMasterOffset([](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
+            return rocksdb::Status::OK();
+          });
+        } else {
+          (void) partition->TryUpdateMasterOffset([partition](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
             return db->RemoveKeys(blackwidow::DataType::kAll, [partition](const rocksdb::Slice& key)->bool {
               return partition != g_pika_server->GetTablePartitionByKey(partition->GetTableName(), key.ToString(false));
             });
-          };
+          });
         }
-        (void) partition->TryUpdateMasterOffset(std::move(onDbChanged));
       } else {
         LOG(WARNING) << "Partition not found, Table Name: "
           << p_info.table_name_ << " Partition Id: " << p_info.partition_id_;
