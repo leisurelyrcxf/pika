@@ -22,6 +22,8 @@
 
 enum BinlogType {
   TypeFirst = 1,
+  // Should neglect this type of binlog
+  TypeVoid = 2,
 };
 
 

@@ -175,7 +175,8 @@ class FlushallCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class FlushdbCmd : public Cmd {
@@ -422,7 +423,8 @@ class PaddingCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 #ifdef TCMALLOC_EXTENSION

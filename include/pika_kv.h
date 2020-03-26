@@ -48,7 +48,8 @@ class SetCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class GetCmd : public Cmd {
@@ -276,7 +277,8 @@ class SetnxCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class SetexCmd : public Cmd {
@@ -302,7 +304,8 @@ class SetexCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class PsetexCmd : public Cmd {
@@ -328,7 +331,8 @@ class PsetexCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class DelvxCmd : public Cmd {
@@ -482,7 +486,8 @@ class ExpireCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class PexpireCmd : public Cmd {
@@ -507,7 +512,8 @@ class PexpireCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class ExpireatCmd : public Cmd {
@@ -551,7 +557,8 @@ class PexpireatCmd : public Cmd {
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) override;
+      uint64_t offset,
+      BinlogType binlog_type) override;
 };
 
 class TtlCmd : public Cmd {

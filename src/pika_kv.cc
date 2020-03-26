@@ -106,7 +106,8 @@ std::string SetCmd::ToBinlog(
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) {
+      uint64_t offset,
+      BinlogType binlog_type) {
   if (condition_ == SetCmd::kEXORPX) {
     std::string content;
     content.reserve(RAW_ARGS_LEN);
@@ -129,7 +130,7 @@ std::string SetCmd::ToBinlog(
     // value
     RedisAppendLen(content, value_.size(), "$");
     RedisAppendContent(content, value_);
-    return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+    return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                                exec_time,
                                                std::stoi(server_id),
                                                logic_id,
@@ -138,7 +139,7 @@ std::string SetCmd::ToBinlog(
                                                content,
                                                {});
   } else {
-    return Cmd::ToBinlog(exec_time, server_id, logic_id, filenum, offset);
+    return Cmd::ToBinlog(exec_time, server_id, logic_id, filenum, offset, binlog_type);
   }
 }
 
@@ -468,7 +469,8 @@ std::string SetnxCmd::ToBinlog(
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) {
+      uint64_t offset,
+      BinlogType binlog_type) {
   std::string content;
   if (success_) {
     content.reserve(RAW_ARGS_LEN);
@@ -485,7 +487,7 @@ std::string SetnxCmd::ToBinlog(
     RedisAppendLen(content, value_.size(), "$");
     RedisAppendContent(content, value_);
 
-    return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+    return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                                exec_time,
                                                std::stoi(server_id),
                                                logic_id,
@@ -525,7 +527,8 @@ std::string SetexCmd::ToBinlog(
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) {
+      uint64_t offset,
+      BinlogType binlog_type) {
 
   std::string content;
   content.reserve(RAW_ARGS_LEN);
@@ -548,7 +551,7 @@ std::string SetexCmd::ToBinlog(
   // value
   RedisAppendLen(content, value_.size(), "$");
   RedisAppendContent(content, value_);
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+  return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                              exec_time,
                                              std::stoi(server_id),
                                              logic_id,
@@ -586,7 +589,8 @@ std::string PsetexCmd::ToBinlog(
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) {
+      uint64_t offset,
+      BinlogType binlog_type) {
 
   std::string content;
   content.reserve(RAW_ARGS_LEN);
@@ -609,7 +613,7 @@ std::string PsetexCmd::ToBinlog(
   // value
   RedisAppendLen(content, value_.size(), "$");
   RedisAppendContent(content, value_);
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+  return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                              exec_time,
                                              std::stoi(server_id),
                                              logic_id,
@@ -814,7 +818,8 @@ std::string ExpireCmd::ToBinlog(
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) {
+      uint64_t offset,
+      BinlogType binlog_type) {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, 3, "*");
@@ -834,7 +839,7 @@ std::string ExpireCmd::ToBinlog(
   RedisAppendLen(content, at.size(), "$");
   RedisAppendContent(content, at);
 
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+  return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                              exec_time,
                                              std::stoi(server_id),
                                              logic_id,
@@ -873,7 +878,8 @@ std::string PexpireCmd::ToBinlog(
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) {
+      uint64_t offset,
+      BinlogType binlog_type) {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, argv_.size(), "*");
@@ -893,7 +899,7 @@ std::string PexpireCmd::ToBinlog(
   RedisAppendLen(content, at.size(), "$");
   RedisAppendContent(content, at);
 
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+  return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                              exec_time,
                                              std::stoi(server_id),
                                              logic_id,
@@ -944,7 +950,8 @@ std::string PexpireatCmd::ToBinlog(
       const std::string& server_id,
       uint64_t logic_id,
       uint32_t filenum,
-      uint64_t offset) {
+      uint64_t offset,
+      BinlogType binlog_type) {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, argv_.size(), "*");
@@ -964,7 +971,7 @@ std::string PexpireatCmd::ToBinlog(
   RedisAppendLen(content, at.size(), "$");
   RedisAppendContent(content, at);
 
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+  return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                              exec_time,
                                              std::stoi(server_id),
                                              logic_id,
