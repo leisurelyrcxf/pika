@@ -181,16 +181,17 @@ std::string PikaBinlogTransverter::ConstructPaddingBinlog(BinlogType type,
   return binlog;
 }
 
-bool PikaBinlogTransverter::BinlogItemWithoutContentDecode(BinlogType type,
+bool PikaBinlogTransverter::BinlogItemWithoutContentDecode(
                                          const std::string& binlog,
                                          BinlogItem* binlog_item) {
   uint16_t binlog_type = 0;
   std::string binlog_str = binlog;
   slash::GetFixed16(&binlog_str, &binlog_type);
-  if (binlog_type != type) {
-    LOG(ERROR) << "Binlog Item type error, expect type:" << type << " actualy type: " << binlog_type;
+  if (binlog_type != TypeFirst && binlog_type != TypeVoid) {
+    LOG(ERROR) << "Binlog Item type error, expect type:" << TypeFirst << " or " << TypeVoid << ", actual type: " << binlog_type;
     return false;
   }
+  binlog_item->binlog_type_ = static_cast<BinlogType>(binlog_type);
   slash::GetFixed32(&binlog_str, &binlog_item->exec_time_);
   slash::GetFixed32(&binlog_str, &binlog_item->server_id_);
   slash::GetFixed64(&binlog_str, &binlog_item->logic_id_);

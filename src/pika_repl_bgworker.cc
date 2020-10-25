@@ -118,13 +118,16 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     if (binlog_res.binlog().empty()) {
       continue;
     }
-    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {
+    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(binlog_res.binlog(), &worker->binlog_item_)) {
       LOG(WARNING) << "Binlog item decode failed";
       slave_partition->SetReplState(ReplState::kTryConnect);
       delete index;
       delete task_arg;
       return;
     }
+//    if (worker->binlog_item_.binlog_type() == TypeVoid) {
+//      continue;
+//    }
     const char* redis_parser_start = binlog_res.binlog().data() + BINLOG_ENCODE_LEN;
     int redis_parser_len = static_cast<int>(binlog_res.binlog().size()) - BINLOG_ENCODE_LEN;
     int processed_len = 0;
