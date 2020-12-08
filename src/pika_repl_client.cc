@@ -152,7 +152,8 @@ Status PikaReplClient::SendPartitionDBSync(const std::string& ip,
                                            const std::string& table_name,
                                            uint32_t partition_id,
                                            const BinlogOffset& boffset,
-                                           const std::string& local_ip) {
+                                           const std::string& local_ip,
+                                           uint32_t master_term) {
   InnerMessage::InnerRequest request;
   request.set_type(InnerMessage::kDBSync);
   InnerMessage::InnerRequest::DBSync* db_sync = request.mutable_db_sync();
@@ -162,6 +163,7 @@ Status PikaReplClient::SendPartitionDBSync(const std::string& ip,
   InnerMessage::Partition* partition = db_sync->mutable_partition();
   partition->set_table_name(table_name);
   partition->set_partition_id(partition_id);
+  partition->set_master_term(master_term);
 
   InnerMessage::BinlogOffset* binlog_offset = db_sync->mutable_binlog_offset();
   binlog_offset->set_filenum(boffset.filenum);
@@ -182,7 +184,8 @@ Status PikaReplClient::SendPartitionTrySync(const std::string& ip,
                                             const std::string& table_name,
                                             uint32_t partition_id,
                                             const BinlogOffset& boffset,
-                                            const std::string& local_ip) {
+                                            const std::string& local_ip,
+                                            uint32_t master_term) {
   InnerMessage::InnerRequest request;
   request.set_type(InnerMessage::kTrySync);
   InnerMessage::InnerRequest::TrySync* try_sync = request.mutable_try_sync();
@@ -192,6 +195,7 @@ Status PikaReplClient::SendPartitionTrySync(const std::string& ip,
   InnerMessage::Partition* partition = try_sync->mutable_partition();
   partition->set_table_name(table_name);
   partition->set_partition_id(partition_id);
+  partition->set_master_term(master_term);
 
   InnerMessage::BinlogOffset* binlog_offset = try_sync->mutable_binlog_offset();
   binlog_offset->set_filenum(boffset.filenum);

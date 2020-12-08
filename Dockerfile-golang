@@ -1,0 +1,42 @@
+FROM golang
+
+LABEL maintainer="SvenDowideit@home.org.au, zhangshaomin_1990@126.com"
+
+ENV PIKA_BUILD_DIR /tmp/pika
+
+COPY . ${PIKA_BUILD_DIR}
+
+WORKDIR ${PIKA_BUILD_DIR}
+
+RUN apt-get update && \
+    apt-get install -y build-essential && \
+    apt-get install -y libsnappy-dev && \
+    apt-get install -y libprotobuf-dev protobuf-compiler && \
+    apt-get install -y libgflags-dev && \
+    apt-get install -y libgoogle-glog-dev && \
+    apt-get install -y bzip2 && \
+    apt-get install -y zlib1g-dev && \
+    apt-get install -y liblz4-1 && \
+    apt-get install -y libzstd-dev && \
+    apt-get install -y cpp-7 gcc-7 g++-7
+
+RUN rm -f /usr/bin/g++ && \
+    ln -s /usr/bin/g++-7 /usr/bin/g++ && \
+    g++ -v
+
+RUN make distclean
+RUN make clean
+RUN cd third/pink/pink/third/slash/slash && make clean && cd -
+
+RUN make && \
+    mv ${PIKA_BUILD_DIR}/output/bin/* /usr/bin/ && \
+    cp -r ${PIKA_BUILD_DIR}/output /pika && \
+    rm -rf /pika/bin && \
+    rm -rf /var/cache/apt-get && \
+    rm -rf .git && \
+    rm -rf ${PIKA_BUILD_DIR} && \
+    apt-get install -y rsync
+
+RUN which pika
+
+WORKDIR /

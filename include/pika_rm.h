@@ -23,7 +23,7 @@
 
 // unit seconds
 #define kSendKeepAliveTimeout (10 * 1000000)
-#define kRecvKeepAliveTimeout (20 * 1000000)
+#define kRecvKeepAliveTimeout (25 * 1000000)
 
 using slash::Status;
 
@@ -171,17 +171,66 @@ class SyncMasterPartition : public SyncPartition {
 
 class SyncSlavePartition : public SyncPartition {
  public:
+  static uint32_t INVALID_MASTER_TERM;
   SyncSlavePartition(const std::string& table_name, uint32_t partition_id);
+  Status InitMasterTerm();
+  bool MatchMasterTerm(uint32_t master_term) { return master_term == INVALID_MASTER_TERM || master_term == m_term_; }
 
-  void Activate(const RmNode& master, const ReplState& repl_state);
+  Status Activate(const RmNode& master, const ReplState& repl_state, const std::string& info_file_path);
   void Deactivate();
+  void DeactivateUnsafe();
 
-  void SetLastRecvTime(uint64_t time);
-  uint64_t LastRecvTime();
+  void SetLastRecvTime(uint64_t time) {
+    slash::RWLock l(&partition_mu_, true);
+    m_info_.SetLastRecvTime(time);
+  }
+  uint64_t LastRecvTime() {
+    slash::RWLock l(&partition_mu_, false);
+    return m_info_.LastRecvTime();
+  }
 
   void SetReplState(const ReplState& repl_state);
-  ReplState State();
+  Status CASReplState(const std::vector<ReplState>& allowed_states, uint32_t exp_master_term, const ReplState& new_state);
+  Status CASReplState(const ReplState& exp_state, uint32_t exp_master_term, const ReplState& new_state);
+  Status CASReplState(ReplState* current_state, uint32_t* current_master_term, const std::function<Status()>& action, const ReplState& new_state);
+  Status CASCheckFailed(const std::vector<ReplState>& exps, const ReplState& new_state) {
+    std::stringstream ss;
+    ss << "CAS partition" << this->partition_info_.ToString() << " "
+       <<"state to '" << ReplStateMsg[new_state] << "' state check failed, expected states: ";
+    if (!exps.empty()) {
+      ss << "'" << ReplStateMsg[exps[0]] << "'";
+    }
+    for (size_t i = 1; i < exps.size(); i++) {
+      ss << " or ";
+      ss << "'" << ReplStateMsg[exps[i]] << "'";
+    }
+    ss << ", but current state is '" << ReplStateMsg[repl_state_] << "'";
+    return Status::Incomplete(ss.str());
+  }
+  Status CASCheckFailed(ReplState exp, const ReplState& new_state) {
+    std::stringstream ss;
+    ss << "CAS partition" << this->partition_info_.ToString() << " "
+       << "state to '" << ReplStateMsg[new_state] << "' state check failed, "
+       << "expected state '" << ReplStateMsg[exp] << "', "
+       << "but current state is '" << ReplStateMsg[repl_state_] << "'";
+    return Status::Incomplete(ss.str());
+  }
+  Status CASCheckFailed(uint32_t exp, const ReplState& new_state) {
+    std::stringstream ss;
+    ss << "CAS partition" << this->partition_info_.ToString() << " "
+       << "state to '" << ReplStateMsg[new_state] << "' term check failed, "
+       << "expected term " << exp << ", "
+       << "but current term is " << m_term_;
+    return Status::Incomplete(ss.str());
+  }
+  void SetReplStateUnsafe(const ReplState& repl_state);
+  ReplState State() {
+    slash::RWLock l(&partition_mu_, false);
+    return repl_state_;
+  }
+  ReplState StateUnsafe() { return repl_state_; }
 
+  Status SetMasterUnsafe(const RmNode& newMaster, const std::string& info_file_path);
   Status CheckSyncTimeout(uint64_t now);
 
   // For display
@@ -190,27 +239,44 @@ class SyncSlavePartition : public SyncPartition {
   std::string ToStringStatus();
 
   const std::string& MasterIp() {
+    slash::RWLock l(&partition_mu_, false);
     return m_info_.Ip();
   }
+  const std::string& MasterIpUnsafe() { return m_info_.Ip(); }
   int MasterPort() {
+    slash::RWLock l(&partition_mu_, false);
     return m_info_.Port();
   }
+  int MasterPortUnsafe() { return m_info_.Port(); }
+  std::string MasterAddr() {
+    slash::RWLock l(&partition_mu_, false);
+    return m_info_.Ip() + ":" + std::to_string(m_info_.Port());
+  }
   void SetMasterSessionId(int32_t session_id) {
+    slash::RWLock l(&partition_mu_, true);
     m_info_.SetSessionId(session_id);
   }
   int32_t MasterSessionId() {
+    slash::RWLock l(&partition_mu_, false);
     return m_info_.SessionId();
   }
   void SetLocalIp(const std::string& local_ip) {
+    slash::RWLock l(&partition_mu_, true);
     local_ip_ = local_ip;
   }
   std::string LocalIp() {
+    slash::RWLock l(&partition_mu_, false);
     return local_ip_;
+  }
+  uint32_t MasterTerm() {
+    slash::RWLock l(&partition_mu_, false);
+    return m_term_;
   }
 
  private:
-  slash::Mutex partition_mu_;
+  pthread_rwlock_t partition_mu_;
   RmNode m_info_;
+  uint32_t m_term_;
   ReplState repl_state_;
   std::string local_ip_;
 };
@@ -235,6 +301,7 @@ class PikaReplicaManager {
   void Start();
   void Stop();
 
+  Status InitSlaveSyncPartitionsMasterTerm();
   Status AddSyncPartitionSanityCheck(const std::set<PartitionInfo>& p_infos);
   Status AddSyncPartition(const std::set<PartitionInfo>& p_infos);
   Status RemoveSyncPartitionSanityCheck(const std::set<PartitionInfo>& p_infos);
@@ -246,6 +313,9 @@ class PikaReplicaManager {
   Status UpdateSyncSlavePartitionSessionId(const PartitionInfo& p_info, int32_t session_id);
   Status DeactivateSyncSlavePartition(const PartitionInfo& p_info);
   Status SetSlaveReplState(const PartitionInfo& p_info, const ReplState& repl_state);
+  Status CASSlaveReplState(const PartitionInfo& p_info,
+                           const ReplState& current_state, uint32_t current_term,
+                           const ReplState& new_state);
   Status GetSlaveReplState(const PartitionInfo& p_info, ReplState* repl_state);
 
   // For Pika Repl Client Thread
@@ -270,7 +340,6 @@ class PikaReplicaManager {
 
   // For SyncSlavePartition
   std::shared_ptr<SyncSlavePartition> GetSyncSlavePartitionByName(const PartitionInfo& p_info);
-
 
 
   Status RunSyncSlavePartitionStateMachine();

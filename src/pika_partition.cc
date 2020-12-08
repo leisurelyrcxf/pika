@@ -53,6 +53,10 @@ std::string DbSyncPath(const std::string& sync_path,
   return sync_path + buf;
 }
 
+
+
+const char* Partition::DBSYNC_TERM_INFO_FILE_NAME = "current_term";
+
 Partition::Partition(const std::string& table_name,
                      uint32_t partition_id,
                      const std::string& table_db_path,
@@ -69,8 +73,8 @@ Partition::Partition(const std::string& table_name,
       table_log_path : PartitionPath(table_log_path, partition_id_);
   bgsave_sub_path_ = g_pika_conf->classic_mode() ?
       table_name : BgsaveSubPath(table_name_, partition_id_);
-  dbsync_path_ = DbSyncPath(g_pika_conf->db_sync_path(), table_name_,
-          partition_id_,  g_pika_conf->classic_mode());
+  dbsync_path_base_ = DbSyncPath(g_pika_conf->db_sync_path(), table_name_,
+                                 partition_id_, g_pika_conf->classic_mode());
   partition_name_ = g_pika_conf->classic_mode() ?
       table_name : PartitionName(table_name_, partition_id_);
 
@@ -232,14 +236,55 @@ bool Partition::SetBinlogOffset(const BinlogOffset& boffset) {
   return false;
 }
 
-void Partition::PrepareRsync() {
-  slash::DeleteDirIfExist(dbsync_path_);
-  slash::CreatePath(dbsync_path_ + "strings");
-  slash::CreatePath(dbsync_path_ + "hashes");
-  slash::CreatePath(dbsync_path_ + "lists");
-  slash::CreatePath(dbsync_path_ + "sets");
-  slash::CreatePath(dbsync_path_ + "zsets");
+bool Partition::PrepareRsync(uint32_t term) {
+  std::string dbsync_path = GenDBSyncPath(term);
+  if (slash::FileExists(dbsync_path)) {
+    LOG(WARNING) << "dir '" << dbsync_path << "' already exists";
+    return false;
+  }
+  RemoveOldTerms();
+  for (auto &data_type : std::vector<std::string>{"strings", "hashes", "lists", "sets", "zsets"}) {
+    int ret;
+    if (0 != (ret = slash::CreatePath(dbsync_path + data_type))) {
+      LOG(WARNING) << "Can't create dir '" << dbsync_path + data_type << "', ret: " << ret;
+      return false;
+    }
+  }
+  return true;
 }
+
+// remove old terms with best effort
+void Partition::RemoveOldTerms() {
+  std::vector<std::string> descendant;
+  if (!slash::GetChildren(dbsync_path_base_, descendant)) {
+    for (auto& file_name : descendant) {
+      std::string file_path = dbsync_path_base_ + file_name;
+      int is_dir = slash::IsDir(file_path);
+      if (is_dir == 0) {
+        // Dir
+        int ret;
+        int i = 0;
+        for (i = 0; i < 100; i++) {
+          if (0 == (ret = slash::DeleteDir(file_path))) {
+            break;
+          }
+        }
+        if (i >= 100) {
+          std::stringstream ss;
+          ss << "Failed to cleanup dir '" << file_path << "', ret: " << ret;
+          LOG(WARNING) << ss.str();
+        }
+      } else if (is_dir == 1) {
+        // File
+        continue;
+      } else {
+        std::stringstream ss;
+        ss << "slash::IsDir(file_path) failed: '" << file_path << "'";
+        LOG(WARNING) << ss.str();
+      }
+    }
+  }
+};
 
 // Try to update master offset
 // This may happend when dbsync from master finished
@@ -248,11 +293,6 @@ void Partition::PrepareRsync() {
 // 2, Replace the old db
 // 3, Update master offset, and the PikaAuxiliaryThread cron will connect and do slaveof task with master
 bool Partition::TryUpdateMasterOffset() {
-  std::string info_path = dbsync_path_ + kBgsaveInfoFile;
-  if (!slash::FileExists(info_path)) {
-    return false;
-  }
-
   std::shared_ptr<SyncSlavePartition> slave_partition =
     g_pika_rm->GetSyncSlavePartitionByName(
         PartitionInfo(table_name_, partition_id_));
@@ -261,12 +301,21 @@ bool Partition::TryUpdateMasterOffset() {
     return false;
   }
 
+  const uint32_t master_term = slave_partition->MasterTerm();
+//  srand (time(nullptr));
+//  sleep(rand() % 3+2);
+  std::string dbsync_path = GenDBSyncPath(master_term);
+  std::string info_path = dbsync_path + kBgsaveInfoFile;
+  if (!slash::FileExists(info_path)) {
+    return false;
+  }
+
   // Got new binlog offset
   std::ifstream is(info_path);
   if (!is) {
     LOG(WARNING) << "Partition: " << partition_name_
         << ", Failed to open info file after db sync";
-    slave_partition->SetReplState(ReplState::kError);
+    slave_partition->CASReplState(ReplState::kWaitDBSync, master_term, ReplState::kError);
     return false;
   }
   std::string line, master_ip;
@@ -281,7 +330,7 @@ bool Partition::TryUpdateMasterOffset() {
         LOG(WARNING) << "Partition: " << partition_name_
             << ", Format of info file after db sync error, line : " << line;
         is.close();
-        slave_partition->SetReplState(ReplState::kError);
+        slave_partition->CASReplState(ReplState::kWaitDBSync, master_term, ReplState::kError);
         return false;
       }
       if (lineno == 3) { master_port = tmp; }
@@ -292,39 +341,50 @@ bool Partition::TryUpdateMasterOffset() {
       LOG(WARNING) << "Partition: " << partition_name_
           << ", Format of info file after db sync error, line : " << line;
       is.close();
-      slave_partition->SetReplState(ReplState::kError);
+      slave_partition->CASReplState(ReplState::kWaitDBSync, master_term, ReplState::kError);
       return false;
     }
   }
   is.close();
 
-  LOG(INFO) << "Partition: " << partition_name_ << " Information from dbsync info"
-      << ",  master_ip: " << master_ip
-      << ", master_port: " << master_port
-      << ", filenum: " << filenum
-      << ", offset: " << offset;
-
-  // Sanity check
-  if (master_ip != slave_partition->MasterIp()
-    || master_port != slave_partition->MasterPort()) {
-    LOG(WARNING) << "Partition: " << partition_name_
-      << " Error master node ip port: " << master_ip << ":" << master_port;
-    slave_partition->SetReplState(ReplState::kError);
-    return false;
-  }
-
   slash::DeleteFile(info_path);
-  if (!ChangeDb(dbsync_path_)) {
-    LOG(WARNING) << "Partition: " << partition_name_
-        << ", Failed to change db";
-    slave_partition->SetReplState(ReplState::kError);
-    return false;
-  }
+  ReplState current_state = ReplState::kWaitDBSync;
+  uint32_t current_master_term = master_term;
+  Status ret = slave_partition->CASReplState(
+    &current_state,
+    &current_master_term,
+    [this, slave_partition, dbsync_path, filenum, offset, master_ip, master_port]() -> Status {
+      // Check address, this is unnecessary actually because we already checked term.
+      if (master_ip != slave_partition->MasterIpUnsafe()
+          || master_port != slave_partition->MasterPortUnsafe()) {
+        std::stringstream ss;
+        ss << "Partition: " << partition_name_
+           << " Error master node ip port: " << master_ip << ":" << master_port << ", latest: "
+           << slave_partition->MasterIpUnsafe() << ":" << slave_partition->MasterPortUnsafe();
+        LOG(WARNING) << ss.str();
+        return Status::Corruption(ss.str());
+      }
 
-  // Update master offset
-  logger_->SetProducerStatus(filenum, offset);
-  slave_partition->SetReplState(ReplState::kTryConnect);
-  return true;
+      LOG(INFO) << "Partition: " << partition_name_ << " Information from dbsync info"
+                << ",  master_ip: " << master_ip
+                << ", master_port: " << master_port
+                << ", filenum: " << filenum
+                << ", offset: " << offset;
+      if (!ChangeDb(dbsync_path)) {
+        LOG(WARNING) << "Partition: " << partition_name_
+                     << ", Failed to change db";
+        return Status::Corruption("failed to change db");
+      }
+
+      // Update master offset
+      logger_->SetProducerStatus(filenum, offset);
+      return Status::OK();
+  }, ReplState::kTryConnect);
+  if (current_state != ReplState::kWaitDBSync || current_master_term != master_term) {
+    assert(!ret.ok());
+    LOG(WARNING) << ret.ToString() << ", unsafe to change db";
+  }
+  return ret.ok();
 }
 
 /*
@@ -333,7 +393,6 @@ bool Partition::TryUpdateMasterOffset() {
  * db remain the old one if return false
  */
 bool Partition::ChangeDb(const std::string& new_path) {
-
   std::string tmp_path(db_path_);
   if (tmp_path.back() == '/') {
     tmp_path.resize(tmp_path.size() - 1);
@@ -372,15 +431,23 @@ bool Partition::IsBgSaving() {
   return bgsave_info_.bgsaving;
 }
 
-void Partition::BgSavePartition() {
+std::shared_ptr<std::atomic<bool>> Partition::BgSavePartition() {
   slash::MutexLock l(&bgsave_protector_);
   if (bgsave_info_.bgsaving) {
-    return;
+    assert(bgsave_info_.current_bg_task);
+    if (bgsave_info_.current_bg_task) {
+      return bgsave_info_.current_bg_task->success;
+    }
+    return nullptr;
   }
-  bgsave_info_.bgsaving = true;
-  BgTaskArg* bg_task_arg = new BgTaskArg();
+  auto* bg_task_arg = new BgTaskArg();
   bg_task_arg->partition = shared_from_this();
+  bg_task_arg->success = std::make_shared<std::atomic<bool>>();
+  *bg_task_arg->success = false;
+  bgsave_info_.bgsaving = true;
+  bgsave_info_.current_bg_task = bg_task_arg;
   g_pika_server->BGSaveTaskSchedule(&DoBgSave, static_cast<void*>(bg_task_arg));
+  return bg_task_arg->success;
 }
 
 BgSaveInfo Partition::bgsave_info() {
@@ -389,24 +456,24 @@ BgSaveInfo Partition::bgsave_info() {
 }
 
 void Partition::DoBgSave(void* arg) {
-  BgTaskArg* bg_task_arg = static_cast<BgTaskArg*>(arg);
+  auto* bg_task_arg = static_cast<BgTaskArg*>(arg);
 
   // Do BgSave
-  bool success = bg_task_arg->partition->RunBgsaveEngine();
+  bg_task_arg->success->store(bg_task_arg->partition->RunBgsaveEngine());
 
   // Some output
   BgSaveInfo info = bg_task_arg->partition->bgsave_info();
   std::ofstream out;
   out.open(info.path + "/" + kBgsaveInfoFile, std::ios::in | std::ios::trunc);
   if (out.is_open()) {
-    out << (time(NULL) - info.start_time) << "s\n"
+    out << (time(nullptr) - info.start_time) << "s\n"
       << g_pika_server->host() << "\n"
       << g_pika_server->port() << "\n"
       << info.filenum << "\n"
       << info.offset << "\n";
     out.close();
   }
-  if (!success) {
+  if (!bg_task_arg->success->load()) {
     std::string fail_path = info.path + "_FAILED";
     slash::RenameFile(info.path.c_str(), fail_path.c_str());
   }
@@ -453,7 +520,12 @@ bool Partition::InitBgsaveEnv() {
     LOG(WARNING) << partition_name_ << " remove exist bgsave dir failed";
     return false;
   }
-  slash::CreatePath(bgsave_info_.path, 0755);
+
+  int ret;
+  if (0 != (ret = slash::CreatePath(bgsave_info_.path, 0755))) {
+    LOG(WARNING) << partition_name_ << " failed to create bg save dir " << bgsave_info_.path << ", ret: " << ret;
+    return false;
+  }
   // Prepare for failed dir
   if (!slash::DeleteDirIfExist(bgsave_info_.path + "_FAILED")) {
     LOG(WARNING) << partition_name_ << " remove exist fail bgsave dir failed :";
@@ -494,6 +566,7 @@ void Partition::ClearBgsave() {
 void Partition::FinishBgsave() {
   slash::MutexLock l(&bgsave_protector_);
   bgsave_info_.bgsaving = false;
+  bgsave_info_.current_bg_task = nullptr;
 }
 
 bool Partition::FlushDB() {
@@ -653,6 +726,39 @@ void Partition::InitKeyScan() {
 KeyScanInfo Partition::GetKeyScanInfo() {
   slash::MutexLock l(&key_info_protector_);
   return key_scan_info_;
+}
+
+Status Partition::GetMasterTerm(uint32_t * master_term) {
+  if (!slash::FileExists(this->GetDBSyncTermInfoFile())) {
+    *master_term = 0;
+    return Status::OK();
+  }
+
+  std::ifstream is(this->GetDBSyncTermInfoFile());
+  if (!is) {
+    std::stringstream ss;
+    ss << "Partition: " << partition_name_
+       << ", Failed to open db sync info file '" << this->GetDBSyncTermInfoFile() << "'";
+    LOG(WARNING) << ss.str();
+    return Status::Corruption(ss.str());
+  }
+  int term;
+  if (!(is >> term)) {
+    std::stringstream ss;
+    ss << "Partition: " << partition_name_
+       << ", corrupted db sync info file '" << this->GetDBSyncTermInfoFile() << "'";
+    LOG(WARNING) << ss.str();
+    return Status::Corruption(ss.str());
+  }
+  if (term < 0) {
+    std::stringstream ss;
+    ss << "Partition: " << partition_name_
+       << ", corrupted db sync info file '" << this->GetDBSyncTermInfoFile() << "', invalid term: " << term;
+    LOG(WARNING) << ss.str();
+    return Status::Corruption(ss.str());
+  }
+  *master_term = static_cast<uint32_t>(term);
+  return Status::OK();
 }
 
 Status Partition::GetKeyNum(std::vector<blackwidow::KeyInfo>* key_info) {

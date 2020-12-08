@@ -113,6 +113,7 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
     response.set_code(InnerMessage::kOk);
     partition_response->set_table_name(table_name);
     partition_response->set_partition_id(partition_id);
+    partition_response->set_master_term(partition_request.master_term());
     if (!partition->GetBinlogOffset(&boffset)) {
       try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kError);
       LOG(WARNING) << "Handle TrySync, Partition: "
@@ -219,6 +220,7 @@ void PikaReplServerConn::HandleDBSyncRequest(void* arg) {
   InnerMessage::BinlogOffset slave_boffset = db_sync_request.binlog_offset();
   std::string table_name = partition_request.table_name();
   uint32_t partition_id = partition_request.partition_id();
+  uint32_t master_term = partition_request.master_term();
   std::string partition_name = table_name + "_" + std::to_string(partition_id);
 
   InnerMessage::InnerResponse response;
@@ -228,6 +230,7 @@ void PikaReplServerConn::HandleDBSyncRequest(void* arg) {
   InnerMessage::Partition* partition_response = db_sync_response->mutable_partition();
   partition_response->set_table_name(table_name);
   partition_response->set_partition_id(partition_id);
+  partition_response->set_master_term(master_term);
 
   LOG(INFO) << "Handle partition DBSync Request";
   bool prior_success = true;
@@ -268,8 +271,11 @@ void PikaReplServerConn::HandleDBSyncRequest(void* arg) {
     }
   }
 
-  g_pika_server->TryDBSync(node.ip(), node.port() + kPortShiftRSync,
-      table_name, partition_id, slave_boffset.filenum());
+  Status s = g_pika_server->TryDBSync(node.ip(), node.port() + kPortShiftRSync,
+      table_name, partition_id, slave_boffset.filenum(), master_term);
+  if (!s.ok()) {
+    response.set_code(InnerMessage::kError);
+  }
 
   std::string reply_str;
   if (!response.SerializeToString(&reply_str)
@@ -378,7 +384,7 @@ void PikaReplServerConn::HandleRemoveSlaveNodeRequest(void* arg) {
 
   std::string table_name = partition.table_name();
   uint32_t partition_id = partition.partition_id();
-  Status s = g_pika_rm->RemovePartitionSlave(RmNode(node.ip(),
+  (void) g_pika_rm->RemovePartitionSlave(RmNode(node.ip(),
         node.port(), table_name, partition_id));
 
   InnerMessage::InnerResponse response;

@@ -8,6 +8,7 @@
 #include "include/pika_server.h"
 #include "include/pika_cluster.h"
 #include "include/pika_cmd_table_manager.h"
+#include "include/pika_utils.h"
 
 extern PikaReplicaManager* g_pika_rm;
 extern PikaServer* g_pika_server;
@@ -395,14 +396,14 @@ void PkClusterSlotsSlaveofCmd::DoInitial() {
   } else {
     ip_ = argv_[2];
     if (!slash::string2l(argv_[3].data(), argv_[3].size(), &port_)
-      || port_ <= 0) {
+      || port_ <= 0 || port_ >= 65536) {
       res_.SetRes(CmdRes::kInvalidInt);
       return;
     }
 
     if ((ip_ == "127.0.0.1" || ip_ == g_pika_server->host())
       && port_ == g_pika_server->port()) {
-      res_.SetRes(CmdRes::kErrOther, "You fucked up");
+      res_.SetRes(CmdRes::kErrOther, "same ip as itself");
       return;
     }
   }
@@ -433,22 +434,61 @@ void PkClusterSlotsSlaveofCmd::DoInitial() {
 }
 
 void PkClusterSlotsSlaveofCmd::Do(std::shared_ptr<Partition> partition) {
+  SlotState expected = INFREE;
+  if (!std::atomic_compare_exchange_strong(&g_pika_server->slot_state_,
+                                           &expected, INBUSY)) {
+    res_.SetRes(CmdRes::kErrOther,
+                "Slot in syncing or a change operation is under way, retry later");
+    return;
+  }
+
+  CmdRes::CmdRet ret;
+  std::string ret_msg;
+  Cleaner cleaner([this,&ret,&ret_msg](){
+    // Don't use store to prevent instruction reordering.
+    SlotState expected = INBUSY;
+    if (!std::atomic_compare_exchange_strong(&g_pika_server->slot_state_,
+                                             &expected, INFREE)) {
+      assert(false);
+      return;
+    }
+    res_.SetRes(ret, ret_msg);
+  });
+
+  auto setRes = [&ret,&ret_msg](CmdRes::CmdRet _ret, const std::string& _ret_msg=""){
+    ret = _ret;
+    ret_msg = _ret_msg;
+  };
+
   std::string table_name = g_pika_conf->default_table();
   std::vector<uint32_t> to_del_slots;
+  std::string linked_message;
   for (const auto& slot : slots_) {
     std::shared_ptr<SyncSlavePartition> slave_partition =
         g_pika_rm->GetSyncSlavePartitionByName(
                 PartitionInfo(table_name, slot));
     if (!slave_partition) {
-      res_.SetRes(CmdRes::kErrOther, "Slot " + std::to_string(slot) + " not found!");
+      setRes(CmdRes::kErrOther, "Slot " + std::to_string(slot) + " not found!");
       return;
     }
     if (is_noone_) {
       // check okay
-    } else if (slave_partition->State() == ReplState::kConnected
-      && slave_partition->MasterIp() == ip_ && slave_partition->MasterPort() == port_) {
+    } else if (slave_partition->MasterIp() == ip_ && slave_partition->MasterPort() == port_) {
+      if (slave_partition->State() != kConnected) {
+        if (!linked_message.empty()) {
+          linked_message.append(" || ");
+        }
+         linked_message.append("Slot " + std::to_string(slot) + " Already Linked To "
+        + slave_partition->MasterAddr() +  ", but is not kConnected, repl state: '" + ReplStateMsg[slave_partition->State()] +  "'");
+         continue;
+      }
       to_del_slots.push_back(slot);
     }
+  }
+
+  if (!linked_message.empty()) {
+    setRes(CmdRes::kErrOther, linked_message);
+    return;
   }
 
   for (auto to_del : to_del_slots) {
@@ -462,20 +502,16 @@ void PkClusterSlotsSlaveofCmd::Do(std::shared_ptr<Partition> partition) {
     std::shared_ptr<SyncSlavePartition> slave_partition =
         g_pika_rm->GetSyncSlavePartitionByName(
                 PartitionInfo(table_name, slot));
-    if (slave_partition->State() == ReplState::kConnected) {
+    if (!slave_partition->MasterIp().empty()) {
+      auto prev_slave_state = slave_partition->State();
       s = g_pika_rm->SendRemoveSlaveNodeRequest(table_name, slot);
-    }
-    if (!s.ok()) {
-      break;
-    }
-    if (slave_partition->State() != ReplState::kNoConnect) {
-      // reset state
-      s = g_pika_rm->SetSlaveReplState(
-          PartitionInfo(table_name, slot), ReplState::kNoConnect);
-      if (!s.ok()) {
+      if (!s.ok() && (prev_slave_state == ReplState::kConnected || prev_slave_state == ReplState::kWaitDBSync)) {
         break;
       }
+      s = Status::OK();
     }
+    slave_partition->SetReplState(ReplState::kNoConnect);
+
     if (is_noone_) {
     } else {
       s = g_pika_rm->ActivateSyncSlavePartition(
@@ -487,9 +523,9 @@ void PkClusterSlotsSlaveofCmd::Do(std::shared_ptr<Partition> partition) {
   }
 
   if (s.ok()) {
-    res_.SetRes(CmdRes::kOk);
+    setRes(CmdRes::kOk);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    setRes(CmdRes::kErrOther, s.ToString());
   }
 }
 
