@@ -248,7 +248,7 @@ std::set<uint32_t> Table::GetPartitionIds() {
 
 std::shared_ptr<Partition> Table::GetPartitionById(uint32_t partition_id) {
   slash::RWLock rwl(&partitions_rw_, false);
-  auto iter = partitions_.find(partition_id);
+  auto iter = partitions_.find(partition_id % partition_num_);
   return (iter == partitions_.end()) ? NULL : iter->second;
 }
 

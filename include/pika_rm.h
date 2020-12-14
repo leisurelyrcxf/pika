@@ -111,7 +111,7 @@ class SyncPartition {
 class SyncMasterPartition : public SyncPartition {
  public:
   SyncMasterPartition(const std::string& table_name, uint32_t partition_id);
-  Status AddSlaveNode(const std::string& ip, int port, int session_id);
+  Status AddSlaveNode(const std::string& ip, int port, uint32_t partition_id, int session_id);
   Status RemoveSlaveNode(const std::string& ip, int port);
 
   Status ActivateSlaveBinlogSync(const std::string& ip, int port, const std::shared_ptr<Binlog> binlog, const BinlogOffset& offset);
@@ -207,12 +207,19 @@ class SyncSlavePartition : public SyncPartition {
   std::string LocalIp() {
     return local_ip_;
   }
+  void SetResharding(bool resharding) {
+    this->resharding_ = resharding;
+  }
+  bool Resharding() {
+    return resharding_;
+  }
 
  private:
   slash::Mutex partition_mu_;
   RmNode m_info_;
   ReplState repl_state_;
   std::string local_ip_;
+  bool resharding_;
 };
 
 class BinlogReaderManager {
@@ -242,7 +249,7 @@ class PikaReplicaManager {
   Status SelectLocalIp(const std::string& remote_ip,
                        const int remote_port,
                        std::string* const local_ip);
-  Status ActivateSyncSlavePartition(const RmNode& node, const ReplState& repl_state);
+  Status ActivateSyncSlavePartition(const RmNode& node, const ReplState& repl_state, bool resharding=false);
   Status UpdateSyncSlavePartitionSessionId(const PartitionInfo& p_info, int32_t session_id);
   Status DeactivateSyncSlavePartition(const PartitionInfo& p_info);
   Status SetSlaveReplState(const PartitionInfo& p_info, const ReplState& repl_state);
@@ -344,6 +351,7 @@ class PikaReplicaManager {
 
  private:
   void InitPartition();
+  std::shared_ptr<SyncMasterPartition> getSyncMasterPartitionByNameLocked(const PartitionInfo& p_info);
 
   pthread_rwlock_t partitions_rw_;
   std::unordered_map<PartitionInfo, std::shared_ptr<SyncMasterPartition>, hash_partition_info> sync_master_partitions_;

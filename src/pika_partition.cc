@@ -247,7 +247,7 @@ void Partition::PrepareRsync() {
 // 1, Check dbsync finished, got the new binlog offset
 // 2, Replace the old db
 // 3, Update master offset, and the PikaAuxiliaryThread cron will connect and do slaveof task with master
-bool Partition::TryUpdateMasterOffset() {
+bool Partition::TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_ptr<blackwidow::BlackWidow> db)> onDbChanged) {
   std::string info_path = dbsync_path_ + kBgsaveInfoFile;
   if (!slash::FileExists(info_path)) {
     return false;
@@ -314,7 +314,7 @@ bool Partition::TryUpdateMasterOffset() {
   }
 
   slash::DeleteFile(info_path);
-  if (!ChangeDb(dbsync_path_)) {
+  if (!ChangeDb(dbsync_path_, std::move(onDbChanged))) {
     LOG(WARNING) << "Partition: " << partition_name_
         << ", Failed to change db";
     slave_partition->SetReplState(ReplState::kError);
@@ -332,7 +332,8 @@ bool Partition::TryUpdateMasterOffset() {
  * return true when change success
  * db remain the old one if return false
  */
-bool Partition::ChangeDb(const std::string& new_path) {
+bool Partition::ChangeDb(const std::string& new_path,
+                         std::function<rocksdb::Status(std::shared_ptr<blackwidow::BlackWidow> db)> onDbChanged) {
 
   std::string tmp_path(db_path_);
   if (tmp_path.back() == '/') {
@@ -362,6 +363,13 @@ bool Partition::ChangeDb(const std::string& new_path) {
   rocksdb::Status s = db_->Open(g_pika_server->bw_options(), db_path_);
   assert(db_);
   assert(s.ok());
+
+  s = onDbChanged(db_);
+  if (!s.ok()) {
+    LOG(INFO) << "onDbChanged() failed";
+    return false;
+  }
+
   slash::DeleteDirIfExist(tmp_path);
   LOG(INFO) << "Partition: " << partition_name_ << ", Change db success";
   return true;

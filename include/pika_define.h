@@ -177,6 +177,9 @@ struct PartitionInfo {
   }
   PartitionInfo() : partition_id_(0) {
   }
+  PartitionInfo Adjust(uint32_t partition_num) const {
+    return PartitionInfo(this->table_name_, this->partition_id_ % partition_num);
+  }
   bool operator==(const PartitionInfo& other) const {
     if (table_name_ == other.table_name_
       && partition_id_ == other.partition_id_) {

@@ -118,13 +118,16 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     if (binlog_res.binlog().empty()) {
       continue;
     }
-    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {
+    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(binlog_res.binlog(), &worker->binlog_item_)) {
       LOG(WARNING) << "Binlog item decode failed";
       slave_partition->SetReplState(ReplState::kTryConnect);
       delete index;
       delete task_arg;
       return;
     }
+//    if (worker->binlog_item_.binlog_type() == TypeVoid) {
+//      continue;
+//    }
     const char* redis_parser_start = binlog_res.binlog().data() + BINLOG_ENCODE_LEN;
     int redis_parser_len = static_cast<int>(binlog_res.binlog().size()) - BINLOG_ENCODE_LEN;
     int processed_len = 0;
@@ -186,21 +189,31 @@ int PikaReplBgWorker::HandleWriteBinlog(pink::RedisParser* parser, const pink::R
   std::shared_ptr<Partition> partition = g_pika_server->GetTablePartitionById(worker->table_name_, worker->partition_id_);
   std::shared_ptr<Binlog> logger = partition->logger();
 
+  std::string dispatch_key = argv.size() >= 2 ? argv[1] : argv[0];
+  std::shared_ptr<Partition> ought_partition = g_pika_server->GetTablePartitionByKey(worker->table_name_, dispatch_key);
+
   logger->Lock();
+  BinlogType binlog_type = BinlogType::TypeFirst;
+  if (ought_partition != partition) {
+    binlog_type = BinlogType::TypeVoid;
+  }
   logger->Put(c_ptr->ToBinlog(binlog_item.exec_time(),
                               std::to_string(binlog_item.server_id()),
                               binlog_item.logic_id(),
                               binlog_item.filenum(),
-                              binlog_item.offset()));
-  uint32_t filenum;
-  uint64_t offset;
-  logger->GetProducerStatus(&filenum, &offset);
+                              binlog_item.offset(),
+                              binlog_type));
+  // meaningless code
+//  uint32_t filenum;
+//  uint64_t offset;
+//  logger->GetProducerStatus(&filenum, &offset);
   logger->Unlock();
 
-  PikaCmdArgsType *v = new PikaCmdArgsType(argv);
-  BinlogItem *b = new BinlogItem(binlog_item);
-  std::string dispatch_key = argv.size() >= 2 ? argv[1] : argv[0];
-  g_pika_rm->ScheduleWriteDBTask(dispatch_key, v, b, worker->table_name_, worker->partition_id_);
+  if (ought_partition == partition) {
+    PikaCmdArgsType *v = new PikaCmdArgsType(argv);
+    BinlogItem *b = new BinlogItem(binlog_item);
+    g_pika_rm->ScheduleWriteDBTask(dispatch_key, v, b, worker->table_name_, worker->partition_id_);
+  }
   return 0;
 }
 

@@ -661,7 +661,8 @@ void Cmd::DoBinlog(std::shared_ptr<Partition> partition) {
                                   g_pika_conf->server_id(),
                                   logic_id,
                                   filenum,
-                                  offset);
+                                  offset,
+                                  BinlogType::TypeFirst);
 
     Status s = partition->WriteBinlog(binlog);
     partition->logger()->Unlock();
@@ -717,7 +718,8 @@ std::string Cmd::ToBinlog(uint32_t exec_time,
                           const std::string& server_id,
                           uint64_t logic_id,
                           uint32_t filenum,
-                          uint64_t offset) {
+                          uint64_t offset,
+                          BinlogType binlog_type) {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, argv_.size(), "*");
@@ -727,7 +729,7 @@ std::string Cmd::ToBinlog(uint32_t exec_time,
     RedisAppendContent(content, v);
   }
 
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+  return PikaBinlogTransverter::BinlogEncode(binlog_type,
                                              exec_time,
                                              std::stoi(server_id),
                                              logic_id,

@@ -377,7 +377,7 @@ Status PkClusterDelSlotsCmd::RemoveSlotsSanityCheck(const std::string& table_nam
 
 /* pkcluster slotsslaveof no one  [0-3,8-11 | all]
  * pkcluster slotsslaveof ip port [0-3,8,9,10,11 | all]
- * pkcluster slotsslaveof ip port [0,2,4,6,7,8,9 | all] force
+ * pkcluster slotsslaveof ip port [0,2,4,6,7,8,9 | all] [force | resharding | force_resharding]
  */
 void PkClusterSlotsSlaveofCmd::DoInitial() {
   if (!CheckArg(argv_.size())) {
@@ -422,13 +422,26 @@ void PkClusterSlotsSlaveofCmd::DoInitial() {
     res_.SetRes(CmdRes::kErrOther, "Slots set empty");
   }
 
-  if (argv_.size() == 5) {
-    // do nothing
-  } else if (argv_.size() == 6
-    && !strcasecmp(argv_[5].data(), "force")) {
+  if (argv_.size() <= 5) {
+    // No more arguments after argv_[4]
+    return;
+  }
+
+  if (!strcasecmp(argv_[5].data(), "force")) {
     force_sync_ = true;
+  } else if (!strcasecmp(argv_[5].data(), "resharding")) {
+    resharding_ = true;
+  } else if (!strcasecmp(argv_[5].data(), "force_resharding")) {
+    force_sync_ = true;
+    resharding_ = true;
   } else {
     res_.SetRes(CmdRes::kSyntaxErr);
+    return;
+  }
+
+  if (argv_.size() >= 7) {
+    res_.SetRes(CmdRes::kSyntaxErr);
+    return;
   }
 }
 
@@ -479,7 +492,7 @@ void PkClusterSlotsSlaveofCmd::Do(std::shared_ptr<Partition> partition) {
     if (is_noone_) {
     } else {
       s = g_pika_rm->ActivateSyncSlavePartition(
-          RmNode(ip_, port_, table_name, slot), state);
+          RmNode(ip_, port_, table_name, slot), state, resharding_);
       if (!s.ok()) {
         break;
       }

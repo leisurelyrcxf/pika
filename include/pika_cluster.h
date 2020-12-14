@@ -101,12 +101,14 @@ class PkClusterSlotsSlaveofCmd : public Cmd {
   std::set<uint32_t> slots_;
   bool force_sync_;
   bool is_noone_;
+  bool resharding_;
   virtual void DoInitial() override;
   virtual void Clear() {
     ip_.clear();
     port_ = 0;
     slots_.clear();
     force_sync_ = false;
+    resharding_ = false;
     is_noone_ = false;
   }
 };

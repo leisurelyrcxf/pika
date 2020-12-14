@@ -13,6 +13,7 @@
 #include "slash/include/slash_string.h"
 
 #include "include/pika_partition.h"
+#include "include/pika_binlog_transverter.h"
 
 //Constant for command name
 //Admin
@@ -430,7 +431,8 @@ class Cmd {
                                const std::string& server_id,
                                uint64_t logic_id,
                                uint32_t filenum,
-                               uint64_t offset);
+                               uint64_t offset,
+                               BinlogType binlog_type);
 
   void SetConn(const std::shared_ptr<pink::PinkConn> conn);
   std::shared_ptr<pink::PinkConn> GetConn();

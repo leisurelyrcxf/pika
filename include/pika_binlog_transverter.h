@@ -21,7 +21,10 @@
 #define BINLOG_ENCODE_LEN 34
 
 enum BinlogType {
+  TypeInvalid = 0,
   TypeFirst = 1,
+  // Should neglect this type of binlog
+  TypeVoid = 2,
 };
 
 
@@ -32,6 +35,7 @@ const int SPACE_STROE_PARAMETER_LENGTH = 5;
 class BinlogItem {
   public:
     BinlogItem() :
+        binlog_type_(TypeInvalid),
         exec_time_(0),
         server_id_(0),
         logic_id_(0),
@@ -48,6 +52,8 @@ class BinlogItem {
     uint64_t offset()      const;
     std::string content()  const;
     std::string ToString() const;
+    BinlogType binlog_type() const { return this->binlog_type_; }
+
 
     void set_exec_time(uint32_t exec_time);
     void set_server_id(uint32_t server_id);
@@ -56,6 +62,7 @@ class BinlogItem {
     void set_offset(uint64_t offset);
 
   private:
+    BinlogType binlog_type_;
     uint32_t exec_time_;
     uint32_t server_id_;
     uint64_t logic_id_;
@@ -83,8 +90,7 @@ class PikaBinlogTransverter{
 
     static std::string ConstructPaddingBinlog(BinlogType type, uint32_t size);
 
-    static bool BinlogItemWithoutContentDecode(BinlogType type,
-                                               const std::string& binlog,
+    static bool BinlogItemWithoutContentDecode(const std::string& binlog,
                                                BinlogItem* binlog_item);
 };
 
