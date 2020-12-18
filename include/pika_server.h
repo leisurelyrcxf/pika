@@ -8,6 +8,7 @@
 
 #include <sys/statfs.h>
 #include <memory>
+#include <slash/include/rsync.h>
 
 #include "slash/include/slash_mutex.h"
 #include "slash/include/slash_status.h"
@@ -218,16 +219,19 @@ class PikaServer {
    */
   void DBSync(const std::string& ip, int port,
               const std::string& table_name,
-              uint32_t partition_id);
-  void TryDBSync(const std::string& ip, int port,
+              uint32_t partition_id,
+              uint32_t master_term,
+              std::shared_ptr<std::atomic<bool>> bg_save_ret);
+  Status TryDBSync(const std::string& ip, int port,
                  const std::string& table_name,
-                 uint32_t partition_id, int32_t top);
+                 uint32_t partition_id, int32_t top,
+                 uint32_t master_term);
   void DbSyncSendFile(const std::string& ip, int port,
                       const std::string& table_name,
-                      uint32_t partition_id);
-  std::string DbSyncTaskIndex(const std::string& ip, int port,
-                              const std::string& table_name,
-                              uint32_t partition_id);
+                      uint32_t partition_id,
+                      uint32_t master_term);
+  static std::string DbSyncTaskIndex(const RmNode& slave, uint32_t master_term);
+  static std::string ExcludeDbSyncTaskIndexMasterTerm(const std::string &task_index);
 
   /*
    * Keyscan used
@@ -298,6 +302,7 @@ class PikaServer {
   friend class InfoCmd;
   friend class PkClusterAddSlotsCmd;
   friend class PkClusterDelSlotsCmd;
+  friend class PkClusterSlotsSlaveofCmd;
   friend class PikaReplClientConn;
   friend class PkClusterInfoCmd;
 

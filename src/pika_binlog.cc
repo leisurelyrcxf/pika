@@ -346,7 +346,7 @@ Status Binlog::SetProducerStatus(uint32_t pro_num, uint64_t pro_offset) {
   pro_num_ = pro_num;
 
   {
-    slash::RWLock(&(version_->rwlock_), true);
+    slash::RWLock(&(version_->rwlock_), true); // TODO has bug here
     version_->pro_num_ = pro_num;
     version_->pro_offset_ = pro_offset;
     version_->StableSave();

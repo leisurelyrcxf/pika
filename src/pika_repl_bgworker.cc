@@ -105,10 +105,10 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
                 binlog_res.partition().table_name(),
                 binlog_res.partition().partition_id(),
                 binlog_res.session_id())) {
-      LOG(WARNING) << "Check Session failed "
-          << binlog_res.partition().table_name()
-          << "_" << binlog_res.partition().partition_id();
-      slave_partition->SetReplState(ReplState::kTryConnect);
+      LOG(WARNING) << "[HandleBGWorkerWriteBinlog] Check Session failed "
+                   << binlog_res.partition().table_name() << ":" << binlog_res.partition().partition_id();
+      (void) slave_partition->CASReplState(std::vector<ReplState>{ReplState::kConnected, ReplState::kWaitDBSync},
+                                           SyncSlavePartition::INVALID_MASTER_TERM, ReplState::kTryConnect, "Check Session failed");
       delete index;
       delete task_arg;
       return;
@@ -119,8 +119,9 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
       continue;
     }
     if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(binlog_res.binlog(), &worker->binlog_item_)) {
-      LOG(WARNING) << "Binlog item decode failed";
-      slave_partition->SetReplState(ReplState::kTryConnect);
+      LOG(WARNING) << "[HandleBGWorkerWriteBinlog] Binlog item decode failed";
+      (void) slave_partition->CASReplState(std::vector<ReplState>{ReplState::kConnected, ReplState::kWaitDBSync},
+                                           SyncSlavePartition::INVALID_MASTER_TERM, ReplState::kTryConnect, "Binlog item decode failed");
       delete index;
       delete task_arg;
       return;
@@ -131,8 +132,9 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     pink::RedisParserStatus ret = worker->redis_parser_.ProcessInputBuffer(
       redis_parser_start, redis_parser_len, &processed_len);
     if (ret != pink::kRedisParserDone) {
-      LOG(WARNING) << "Redis parser failed";
-      slave_partition->SetReplState(ReplState::kTryConnect);
+      LOG(WARNING) << "[HandleBGWorkerWriteBinlog] Redis parser failed, ret: " << ret;
+      (void) slave_partition->CASReplState(std::vector<ReplState>{ReplState::kConnected, ReplState::kWaitDBSync},
+                                           SyncSlavePartition::INVALID_MASTER_TERM, ReplState::kTryConnect, "redis parser error");
       delete index;
       delete task_arg;
       return;

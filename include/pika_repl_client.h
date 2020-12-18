@@ -91,13 +91,15 @@ class PikaReplClient {
                              const std::string& table_name,
                              uint32_t partition_id,
                              const BinlogOffset& boffset,
-                             const std::string& local_ip);
+                             const std::string& local_ip,
+                             uint32_t master_term);
   Status SendPartitionTrySync(const std::string& ip,
                               uint32_t port,
                               const std::string& table_name,
                               uint32_t partition_id,
                               const BinlogOffset& boffset,
-                              const std::string& local_ip);
+                              const std::string& local_ip,
+                              uint32_t master_term);
   Status SendPartitionBinlogSync(const std::string& ip,
                                  uint32_t port,
                                  const std::string& table_name,
