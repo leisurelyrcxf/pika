@@ -90,6 +90,7 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
 
   std::string table_name = partition_request.table_name();
   uint32_t partition_id = partition_request.partition_id();
+  uint32_t master_term = partition_request.master_term();
 
   bool pre_success = true;
   response.set_type(InnerMessage::Type::kTrySync);
@@ -113,7 +114,7 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
     response.set_code(InnerMessage::kOk);
     partition_response->set_table_name(table_name);
     partition_response->set_partition_id(partition_id);
-    partition_response->set_master_term(partition_request.master_term());
+    partition_response->set_master_term(master_term);
     if (!partition->GetBinlogOffset(&boffset)) {
       try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kError);
       LOG(WARNING) << "Handle TrySync, Partition: "
@@ -164,7 +165,7 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
       if (session_id != -1) {
         try_sync_response->set_session_id(session_id);
         // incremental sync
-        Status s = g_pika_rm->AddPartitionSlave(RmNode(node.ip(), node.port(), table_name, partition_id, session_id));
+        Status s = g_pika_rm->AddPartitionSlave(RmNode(node.ip(), node.port(), table_name, partition_id, session_id), master_term);
         if (!s.ok()) {
           try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kError);
           LOG(WARNING) << "Partition: " << partition_name << " TrySync Failed, " << s.ToString();
@@ -243,7 +244,7 @@ void PikaReplServerConn::HandleDBSyncRequest(void* arg) {
     }
     if (prior_success) {
       db_sync_response->set_session_id(session_id);
-      Status s = g_pika_rm->AddPartitionSlave(RmNode(node.ip(), node.port(), table_name, partition_id, session_id));
+      Status s = g_pika_rm->AddPartitionSlave(RmNode(node.ip(), node.port(), table_name, partition_id, session_id), master_term);
       if (s.ok()) {
         const std::string ip_port = slash::IpPortString(node.ip(), node.port());
         g_pika_rm->ReplServerUpdateClientConnMap(ip_port, conn->fd());
@@ -395,6 +396,7 @@ void PikaReplServerConn::HandleRemoveSlaveNodeRequest(void* arg) {
   InnerMessage::Partition* partition_response = remove_slave_node_response->mutable_partition();
   partition_response->set_table_name(table_name);
   partition_response->set_partition_id(partition_id);
+  partition_response->set_master_term(partition.master_term());
   InnerMessage::Node* node_response = remove_slave_node_response->mutable_node();
   node_response->set_ip(g_pika_server->host());
   node_response->set_port(g_pika_server->port());

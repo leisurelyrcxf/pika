@@ -71,7 +71,7 @@ class SyncWindow {
 // role master use
 class SlaveNode : public RmNode {
  public:
-  SlaveNode(const std::string& ip, int port, const std::string& table_name, uint32_t partition_id, int session_id);
+  SlaveNode(const std::string& ip, int port, const std::string& table_name, uint32_t partition_id, int session_id, uint32_t master_term);
   ~SlaveNode();
   void Lock() {
     slave_mu.Lock();
@@ -85,6 +85,7 @@ class SlaveNode : public RmNode {
   SyncWindow sync_win;
   BinlogOffset sent_offset;
   BinlogOffset acked_offset;
+  uint32_t master_term_;
 
   std::string ToStringStatus();
 
@@ -111,7 +112,7 @@ class SyncPartition {
 class SyncMasterPartition : public SyncPartition {
  public:
   SyncMasterPartition(const std::string& table_name, uint32_t partition_id);
-  Status AddSlaveNode(const std::string& ip, int port, uint32_t partition_id, int session_id);
+  Status AddSlaveNode(const std::string& ip, int port, uint32_t partition_id, int session_id, uint32_t master_term);
   Status RemoveSlaveNode(const std::string& ip, int port);
 
   Status ActivateSlaveBinlogSync(const std::string& ip, int port, const std::shared_ptr<Binlog> binlog, const BinlogOffset& offset);
@@ -171,13 +172,11 @@ class SyncMasterPartition : public SyncPartition {
 
 class SyncSlavePartition : public SyncPartition {
  public:
-  static uint32_t INVALID_MASTER_TERM;
   SyncSlavePartition(const std::string& table_name, uint32_t partition_id);
   Status InitMasterTerm();
 
  private:
   bool matchStates(const std::vector<ReplState>& allowed_current_states, ReplState* current_state);
-  bool matchMasterTerm(uint32_t master_term) { return master_term == INVALID_MASTER_TERM || master_term == m_term_; }
 
  public:
   Status Activate(const RmNode& master, const ReplState& repl_state, const std::string& info_file_path);
@@ -193,22 +192,19 @@ class SyncSlavePartition : public SyncPartition {
   }
 
   void SetReplState(const ReplState& repl_state);
-  Status CASReplState(const std::vector<ReplState>& allowed_states,
-                      uint32_t exp_master_term, const ReplState& new_state,
-                      const std::string& reason);
   Status CASReplState(const ReplState& exp_state, uint32_t exp_master_term,
                       const ReplState& new_state,
                       const std::string& reason);
-  Status CASReplState(ReplState* current_state, uint32_t* current_master_term,
-                      const std::function<Status()>& action, const ReplState& new_state,
-                      const std::string& reason);
   Status CASReplState(const std::vector<ReplState>& allowed_states,
-                      ReplState* current_state, uint32_t* current_master_term,
+                      uint32_t exp_master_term, const ReplState& new_state,
+                      const std::string& reason);
+  Status CASReplState(const std::vector<ReplState>& allowed_states, ReplState* current_state,
+                      uint32_t exp_master_term, uint32_t* current_master_term,
                       const std::function<Status()>& action,
                       const ReplState& new_state,
                       const std::string& reason);
-  Status CASReplState(const std::vector<ReplState>& allowed_states,
-                      ReplState* current_state, uint32_t* current_master_term,
+  Status CASReplState(const std::vector<ReplState>& allowed_states, ReplState* current_state,
+                      uint32_t exp_master_term, uint32_t* current_master_term,
                       const std::function<Status()>& action,
                       const ReplState& new_state,
                       const std::function<void()>& callback_on_action_success,
@@ -395,7 +391,7 @@ class PikaReplicaManager {
 
   // following funcs invoked by master partition only
 
-  Status AddPartitionSlave(const RmNode& slave);
+  Status AddPartitionSlave(const RmNode& slave, uint32_t master_term);
   Status RemovePartitionSlave(const RmNode& slave);
   bool CheckPartitionSlaveExist(const RmNode& slave);
   bool CheckSlaveDBConnect();

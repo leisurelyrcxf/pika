@@ -112,7 +112,8 @@ class PikaReplClient {
                              uint32_t port,
                              const std::string& table_name,
                              uint32_t partition_id,
-                             const std::string& local_ip);
+                             const std::string& local_ip,
+                             uint32_t master_term);
  private:
   size_t GetHashIndex(std::string key, bool upper_half);
   void UpdateNextAvail() {

@@ -350,9 +350,10 @@ struct hash_rm_node {
 };
 
 struct WriteTask {
-  struct RmNode rm_node_;
+  class RmNode rm_node_;
+  uint32_t slave_master_term_;
   struct BinlogChip binlog_chip_;
-  WriteTask(RmNode rm_node, BinlogChip binlog_chip) : rm_node_(rm_node), binlog_chip_(binlog_chip) {
+  WriteTask(RmNode rm_node, uint32_t slave_master_term, BinlogChip binlog_chip) : rm_node_(rm_node), slave_master_term_(slave_master_term), binlog_chip_(binlog_chip) {
   }
 };
 

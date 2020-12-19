@@ -350,12 +350,16 @@ bool Partition::TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_
   }
   is.close();
 
-  slash::DeleteFile(info_path);
+  auto deleteRet = slash::DeleteFile(info_path);
+  if (!deleteRet.ok()) {
+    LOG(WARNING) << "Partition: " << partition_name_ << ", delete info file '" << info_path << "' failed: " << deleteRet.ToString();
+    return false;
+  }
   ReplState current_state = ReplState::kWaitDBSync;
   uint32_t current_master_term = master_term;
-  Status ret = slave_partition->CASReplState(
-    &current_state,
-    &current_master_term,
+  return slave_partition->CASReplState(
+    std::vector<ReplState>{ReplState::kWaitDBSync}, &current_state,
+    master_term, &current_master_term,
     [this, slave_partition, dbsync_path, filenum, offset, master_ip, master_port, onDbChanged]() -> Status {
       // Check address, this is unnecessary actually because we already checked term.
       if (master_ip != slave_partition->MasterIpUnsafe()
@@ -381,12 +385,7 @@ bool Partition::TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_
       // Update master offset
       logger_->SetProducerStatus(filenum, offset);
       return Status::OK();
-  }, ReplState::kTryConnect, "TryUpdateMasterOffset");
-  if (current_state != ReplState::kWaitDBSync || current_master_term != master_term) {
-    assert(!ret.ok());
-    LOG(WARNING) << ret.ToString() << ", unsafe to change db";
-  }
-  return ret.ok();
+  }, ReplState::kTryConnect, "TryUpdateMasterOffset").ok();
 }
 
 /*

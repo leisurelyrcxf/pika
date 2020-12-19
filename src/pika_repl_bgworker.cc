@@ -54,6 +54,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
 
   std::string table_name;
   uint32_t partition_id = 0;
+  uint32_t master_term = 0;
   BinlogOffset ack_start, ack_end;
   // find the first not keepalive binlogsync
   for (size_t i = 0; i < index->size(); ++i) {
@@ -61,6 +62,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     if (i == 0) {
       table_name = binlog_res.partition().table_name();
       partition_id = binlog_res.partition().partition_id();
+      master_term = binlog_res.partition().master_term();
     }
     if (!binlog_res.binlog().empty()) {
       ack_start.filenum = binlog_res.binlog_offset().filenum();
@@ -74,6 +76,12 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
   std::shared_ptr<Partition> partition = g_pika_server->GetTablePartitionById(table_name, partition_id);
   if (!partition) {
     LOG(WARNING) << "Partition " << table_name << "_" << partition_id << " Not Found";
+    delete index;
+    delete task_arg;
+    return;
+  }
+  if (master_term == 0) {
+    LOG(WARNING) << "Partition " << table_name << "_" << partition_id << " invalid master term: 0";
     delete index;
     delete task_arg;
     return;
@@ -108,7 +116,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
       LOG(WARNING) << "[HandleBGWorkerWriteBinlog] Check Session failed "
                    << binlog_res.partition().table_name() << ":" << binlog_res.partition().partition_id();
       (void) slave_partition->CASReplState(std::vector<ReplState>{ReplState::kConnected, ReplState::kWaitDBSync},
-                                           SyncSlavePartition::INVALID_MASTER_TERM, ReplState::kTryConnect, "Check Session failed");
+                                           master_term, ReplState::kTryConnect, "Check Session failed");
       delete index;
       delete task_arg;
       return;
@@ -121,7 +129,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(binlog_res.binlog(), &worker->binlog_item_)) {
       LOG(WARNING) << "[HandleBGWorkerWriteBinlog] Binlog item decode failed";
       (void) slave_partition->CASReplState(std::vector<ReplState>{ReplState::kConnected, ReplState::kWaitDBSync},
-                                           SyncSlavePartition::INVALID_MASTER_TERM, ReplState::kTryConnect, "Binlog item decode failed");
+                                           master_term, ReplState::kTryConnect, "Binlog item decode failed");
       delete index;
       delete task_arg;
       return;
@@ -134,7 +142,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     if (ret != pink::kRedisParserDone) {
       LOG(WARNING) << "[HandleBGWorkerWriteBinlog] Redis parser failed, ret: " << ret;
       (void) slave_partition->CASReplState(std::vector<ReplState>{ReplState::kConnected, ReplState::kWaitDBSync},
-                                           SyncSlavePartition::INVALID_MASTER_TERM, ReplState::kTryConnect, "redis parser error");
+                                           master_term, ReplState::kTryConnect, "redis parser error");
       delete index;
       delete task_arg;
       return;
