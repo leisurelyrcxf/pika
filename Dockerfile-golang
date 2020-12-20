@@ -28,7 +28,7 @@ RUN make distclean
 RUN make clean
 RUN cd third/pink/pink/third/slash/slash && make clean && cd -
 
-RUN make && \
+RUN make -j5 && \
     mv ${PIKA_BUILD_DIR}/output/bin/* /usr/bin/ && \
     cp -r ${PIKA_BUILD_DIR}/output /pika && \
     rm -rf /pika/bin && \

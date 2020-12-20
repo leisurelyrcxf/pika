@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <queue>
 #include <vector>
+#include <algorithm>
 
 #include "slash/include/slash_status.h"
 
@@ -22,8 +23,8 @@
 #define kBinlogSendBatchNum 100
 
 // unit seconds
-#define kSendKeepAliveTimeout (10 * 1000000)
-#define kRecvKeepAliveTimeout (25 * 1000000)
+#define kSendKeepAliveTimeout (2 * 1000000)
+#define kRecvKeepAliveTimeout (20 * 1000000)
 
 using slash::Status;
 
@@ -172,11 +173,13 @@ class SyncMasterPartition : public SyncPartition {
 
 class SyncSlavePartition : public SyncPartition {
  public:
+  static const std::vector<ReplState> NEEDS_CHECK_SYNC_TIMEOUT_STATES;
+  static bool NeedsCheckSyncTimeout(const ReplState& current) {
+    return std::any_of(NEEDS_CHECK_SYNC_TIMEOUT_STATES.begin(), NEEDS_CHECK_SYNC_TIMEOUT_STATES.end(),[current](const ReplState& s) { return s == current; });
+  }
+
   SyncSlavePartition(const std::string& table_name, uint32_t partition_id);
   Status InitMasterTerm();
-
- private:
-  bool matchStates(const std::vector<ReplState>& allowed_current_states, ReplState* current_state);
 
  public:
   Status Activate(const RmNode& master, const ReplState& repl_state, const std::string& info_file_path);
@@ -192,23 +195,14 @@ class SyncSlavePartition : public SyncPartition {
   }
 
   void SetReplState(const ReplState& repl_state);
-  Status CASReplState(const ReplState& exp_state, uint32_t exp_master_term,
+  Status CASReplState(const ReplState& exp_state,
+                      uint32_t exp_master_term,
                       const ReplState& new_state,
                       const std::string& reason);
   Status CASReplState(const std::vector<ReplState>& allowed_states,
-                      uint32_t exp_master_term, const ReplState& new_state,
-                      const std::string& reason);
-  Status CASReplState(const std::vector<ReplState>& allowed_states, ReplState* current_state,
-                      uint32_t exp_master_term, uint32_t* current_master_term,
+                      uint32_t exp_master_term,
                       const std::function<Status()>& action,
                       const ReplState& new_state,
-                      const std::string& reason);
-  Status CASReplState(const std::vector<ReplState>& allowed_states, ReplState* current_state,
-                      uint32_t exp_master_term, uint32_t* current_master_term,
-                      const std::function<Status()>& action,
-                      const ReplState& new_state,
-                      const std::function<void()>& callback_on_action_success,
-                      const std::function<void(const Status&)>& callback_on_action_failed,
                       const std::string& reason);
 
   Status CASStateCheckFailed(const std::vector<ReplState>& exps, const ReplState& new_state) {
@@ -241,6 +235,7 @@ class SyncSlavePartition : public SyncPartition {
     }
     return Status::Incomplete(ss.str());
   }
+  bool matchStates(const std::vector<ReplState>& allowed_current_states);
   void SetReplStateUnsafe(const ReplState& repl_state);
   ReplState State() {
     slash::RWLock l(&partition_mu_, false);
@@ -248,8 +243,10 @@ class SyncSlavePartition : public SyncPartition {
   }
   ReplState StateUnsafe() { return repl_state_; }
 
-  Status SetMasterUnsafe(const RmNode& newMaster, const std::string& info_file_path);
+  Status ResetMasterUnsafe(const std::string& info_file_path, const std::string& reason);
+  Status SetMasterUnsafe(const RmNode& newMaster, const std::string& info_file_path, const std::string& reason);
   Status CheckSyncTimeout(uint64_t now);
+  Status ResetReplication(uint32_t master_term, const std::string &reason);
 
   // For display
   Status GetInfo(std::string* info);
@@ -298,6 +295,8 @@ class SyncSlavePartition : public SyncPartition {
     slash::RWLock l(&partition_mu_, false);
     return m_term_;
   }
+ private:
+  Status GetInfoFilePath(std::string *info_file_path);
 
  private:
   pthread_rwlock_t partition_mu_;

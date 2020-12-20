@@ -173,7 +173,7 @@ Status SyncMasterPartition::AddSlaveNode(const std::string& ip, int port, uint32
 
 Status SyncMasterPartition::RemoveSlaveNode(const std::string& ip, int port) {
   slash::MutexLock l(&partition_mu_);
-  for (size_t i  = 0; i < slaves_.size(); ++i) {
+  for (size_t i = 0; i < slaves_.size(); ++i) {
     std::shared_ptr<SlaveNode> slave = slaves_[i];
     if (ip == slave->Ip() && port == slave->Port()) {
       slaves_.erase(slaves_.begin() + i);
@@ -508,9 +508,8 @@ bool SyncMasterPartition::BinlogCloudPurge(uint32_t index) {
 }
 
 Status SyncMasterPartition::CheckSyncTimeout(uint64_t now) {
-  slash::MutexLock l(&partition_mu_);
+  slash::MutexLock pl(&partition_mu_);
 
-  std::shared_ptr<SlaveNode> slave_ptr = nullptr;
   std::vector<Node> to_del;
 
   for (auto& slave_ptr : slaves_) {
@@ -621,6 +620,9 @@ bool SyncMasterPartition::CheckSessionId(const std::string& ip, int port,
 }
 
 /* SyncSlavePartition */
+
+const std::vector<ReplState> SyncSlavePartition::NEEDS_CHECK_SYNC_TIMEOUT_STATES{ReplState::kWaitDBSync, ReplState::kWaitReply, ReplState::kConnected};
+
 SyncSlavePartition::SyncSlavePartition(const std::string& table_name,
                                        uint32_t partition_id)
   : SyncPartition(table_name, partition_id),
@@ -660,109 +662,87 @@ void SyncSlavePartition::SetReplState(const ReplState& repl_state) {
 void SyncSlavePartition::SetReplStateUnsafe(const ReplState& repl_state) {
   if (repl_state == ReplState::kNoConnect) {
     // deactivate
-    (void) SetMasterUnsafe(RmNode(), "");
+    (void) SetMasterUnsafe(RmNode(), "", "state reset to ReplState::kNoConnect");
     repl_state_ = ReplState::kNoConnect;
     return;
   }
   repl_state_ = repl_state;
 }
 
-Status SyncSlavePartition::CASReplState(const ReplState& exp_state, const uint32_t exp_master_term,
-                                        const ReplState& new_state, const std::string& reason) {
- return CASReplState(std::vector<ReplState>{exp_state}, exp_master_term, new_state, reason);
-}
-
-Status SyncSlavePartition::CASReplState(const std::vector<ReplState>& allowed_current_states, const uint32_t exp_master_term,
-                                        const ReplState& new_state, const std::string& reason) {
-  ReplState current_state;
-  uint32_t current_master_term = exp_master_term;
-  return CASReplState(allowed_current_states, &current_state,
-                      exp_master_term, &current_master_term,
-                      []()->Status{ return Status::OK(); }, new_state, reason);
-}
-
-Status SyncSlavePartition::CASReplState(const std::vector<ReplState>& allowed_states, ReplState* current_state,
-                                        uint32_t exp_master_term, uint32_t* current_master_term,
-                                        const std::function<Status()>& action,
+Status SyncSlavePartition::CASReplState(const ReplState& exp_state,
+                                        const uint32_t exp_master_term,
                                         const ReplState& new_state,
                                         const std::string& reason) {
-  return CASReplState(allowed_states, current_state,
-                      exp_master_term, current_master_term,
-                      action, new_state,
-                      []()->void{}, [this, exp_master_term, current_state, new_state, reason](const Status& ret)->void{
-                        SetReplStateUnsafe(ReplState::kError);
-
-                        LOG(WARNING) << "CAS partition " << this->partition_info_.ToString() << " "
-                        << "state from '" << ReplStateMsg[*current_state] << "' term "<< exp_master_term << " "
-                        << "to '" << ReplStateMsg[new_state] << "' failed due to action error '" << ret.ToString().data() << "', "
-                        << "set state to '" << ReplStateMsg[ReplState::kError] << "'" << ", cas reason: " << reason;
-                      },
-                      reason);
+ return CASReplState(std::vector<ReplState>{exp_state},
+                     exp_master_term,
+                     []()->Status{ return Status::OK(); },
+                     new_state,
+                     reason);
 }
 
-Status SyncSlavePartition::CASReplState(const std::vector<ReplState>& allowed_states, ReplState* current_state,
-                                        uint32_t exp_master_term, uint32_t* current_master_term,
+Status SyncSlavePartition::CASReplState(const std::vector<ReplState>& allowed_states,
+                                        uint32_t exp_master_term,
                                         const std::function<Status()>& action,
                                         const ReplState& new_state,
-                                        const std::function<void()>& callback_on_action_success,
-                                        const std::function<void(const Status&)>& callback_on_action_failed,
                                         const std::string& reason) {
   slash::RWLock l(&partition_mu_, true);
-  if (!matchStates(allowed_states, current_state)) {
-    *current_state = repl_state_;
-    *current_master_term = m_term_;
+  if (!matchStates(allowed_states)) {
     auto err = CASStateCheckFailed(allowed_states, new_state);
     LOG(WARNING) << err.ToString().data() << ", cas reason: " << reason;
     return err;
   }
   // Avoid ABA problem
   if (exp_master_term != m_term_) {
-    *current_state = repl_state_;
-    *current_master_term = m_term_;
     auto err = CASTermCheckFailed(exp_master_term, allowed_states, new_state);
     LOG(WARNING) << err.ToString().data() << ", cas reason: " << reason;
     return err;
   }
   Status ret = action();
   if (ret.ok()) {
-    SetReplStateUnsafe(new_state);
-
     if (new_state != ReplState::kError && new_state != ReplState::kTryConnect && new_state != ReplState::kNoConnect && new_state != ReplState::kDBNoConnect) {
       LOG(INFO) << "CAS partition " << this->partition_info_.ToString() << " "
-                << "state from '" << ReplStateMsg[*current_state] << "' term " << exp_master_term << " "
+                << "state from '" << ReplStateMsg[repl_state_] << "' term " << exp_master_term << " "
                 << "to '" << ReplStateMsg[new_state] << "' successfully" << ", cas reason: " << reason;
     } else {
       LOG(WARNING) << "CAS partition " << this->partition_info_.ToString() << " "
-                   << "state from '" << ReplStateMsg[*current_state] << "' term " << exp_master_term << " "
+                   << "state from '" << ReplStateMsg[repl_state_] << "' term " << exp_master_term << " "
                    << "to '" << ReplStateMsg[new_state] << "' successfully" << ", cas reason: " << reason;
     }
-    callback_on_action_success();
-  } else {
-    callback_on_action_failed(ret);
+    SetReplStateUnsafe(new_state);
+    if (NeedsCheckSyncTimeout(repl_state_)) {
+      m_info_.SetLastRecvTime(slash::NowMicros());
+    }
   }
   return ret;
 }
 
-bool SyncSlavePartition::matchStates(const std::vector<ReplState>& allowed_current_states, ReplState* current_state) {
+bool SyncSlavePartition::matchStates(const std::vector<ReplState>& allowed_current_states) {
   for (auto& allowed_state : allowed_current_states) {
     if (allowed_state == repl_state_) {
-      *current_state = allowed_state;
       return true;
     }
   }
   return false;
 }
 
-Status SyncSlavePartition::SetMasterUnsafe(const RmNode& newMaster, const std::string& info_file_path) {
+Status SyncSlavePartition::ResetMasterUnsafe(const std::string& info_file_path, const std::string& reason) {
+  auto old = this->m_info_;
+//  (void) this->SetMasterUnsafe(RmNode(), info_file_path);
+  old.SetSessionId(0);
+  return this->SetMasterUnsafe(old, info_file_path, reason);
+}
+
+Status SyncSlavePartition::SetMasterUnsafe(const RmNode& newMaster, const std::string& info_file_path, const std::string& reason) {
   auto old_master = m_info_;
 
   if (newMaster.Ip().empty()) {
     m_info_ = newMaster;
     if (!(old_master==newMaster)) {
-      LOG(INFO) << "Change master of partition " << partition_info_.table_name_ << ":" << partition_info_.partition_id_
-                << " from '" << old_master.GetAddr() << "', "
-                << " to '" << m_info_.GetAddr() << "'. "
-                << "Unchanged master term: " << m_term_;
+      LOG(INFO) << "Change master of partition " << partition_info_.table_name_ << ":" << partition_info_.partition_id_ << " "
+                << "from '" << old_master.GetAddr() << "' "
+                << "to '" << m_info_.GetAddr() << "', "
+                << "Unchanged master term: " << m_term_ << ", "
+                << "Set Master Reason: " << reason;
     }
     return Status::OK();
   }
@@ -770,14 +750,14 @@ Status SyncSlavePartition::SetMasterUnsafe(const RmNode& newMaster, const std::s
   size_t last_slash_index = info_file_path.rfind('/');
   if (last_slash_index == std::string::npos) {
     std::stringstream ss;
-    ss << "can't find '/' in '" << info_file_path << "'";
+    ss << "can't find '/' in '" << info_file_path << "', Set Master Reason: " << reason;
     return Status::Corruption(ss.str());
   }
   std::string info_file_dir = info_file_path.substr(0, last_slash_index);
   if (!slash::FileExists(info_file_dir)) {
     if (slash::CreatePath(info_file_dir)) {
       std::stringstream ss;
-      ss << "can't create info file dir '" << info_file_dir << "'";
+      ss << "can't create info file dir '" << info_file_dir << "', Set Master Reason: " << reason;
       return Status::Corruption(ss.str());
     }
   }
@@ -786,16 +766,17 @@ Status SyncSlavePartition::SetMasterUnsafe(const RmNode& newMaster, const std::s
   fix.open(info_file_path, std::ios::in | std::ios::trunc);
   if (!fix.is_open()) {
     std::stringstream ss;
-    ss << "can't open term info file '" << info_file_path << "'";
+    ss << "can't open term info file '" << info_file_path << "', Set Master Reason: " << reason;
     return Status::Corruption(ss.str());
   }
   m_info_ = newMaster;
+  m_info_.SetLastRecvTime(slash::NowMicros());
   fix << ++m_term_;
   fix.close();
   LOG(INFO) << "Change master of partition " << partition_info_.table_name_ << ":" << partition_info_.partition_id_
             << " from '" << old_master.GetAddr() << "', "
             << " to '" << m_info_.GetAddr() << "'. "
-            << "New master term: " << m_term_;
+            << "New master term: " << m_term_  << ", Set Master Reason: " << reason;
   return Status::OK();
 }
 
@@ -804,7 +785,7 @@ Status SyncSlavePartition::CheckSyncTimeout(uint64_t now) {
   {
     slash::RWLock l(&partition_mu_, false);
     // no need to do session keepalive return ok
-    if (repl_state_ != ReplState::kWaitDBSync && repl_state_ != ReplState::kConnected) {
+    if (!NeedsCheckSyncTimeout(repl_state_)) {
       return Status::OK();
     }
     if (m_info_.LastRecvTime() + kRecvKeepAliveTimeout >= now) {
@@ -813,24 +794,51 @@ Status SyncSlavePartition::CheckSyncTimeout(uint64_t now) {
     master_term = this->m_term_;
   }
 
-  ReplState state;
-  uint32_t current_term = master_term;
-  (void) CASReplState(std::vector<ReplState>{ReplState::kWaitDBSync, ReplState::kConnected}, &state,
-                      master_term, &current_term,
-                      [this, now]()->Status{
+  std::string info_file_path;
+  auto s = GetInfoFilePath(&info_file_path);
+  if (!s.ok()) {
+    return s;
+  }
+
+  (void) CASReplState(NEEDS_CHECK_SYNC_TIMEOUT_STATES,
+                      master_term,
+                      [this, now, info_file_path]()->Status{
                         if (m_info_.LastRecvTime() + kRecvKeepAliveTimeout < now) {
-                          return Status::OK();
+                          auto s = this->ResetMasterUnsafe(info_file_path, "SyncSlavePartition::CheckSyncTimeout");
+                          if (s.ok()) {
+                            g_pika_server->SetLoopPartitionStateMachine(true);
+                          }
+                          return s;
                         }
                         return Status::Incomplete("sync not timeout, skip...");
                       },
                       ReplState::kTryConnect,
-                      []()->void{
-                        g_pika_server->SetLoopPartitionStateMachine(true);
-                      },
-                      [](const Status& ret)->void{
-                        LOG(WARNING) << "CAS state to kTryConnect action failed: " << ret.ToString();
-                      },
                       "SyncSlavePartition::CheckSyncTimeout");
+  return Status::OK();
+}
+
+Status SyncSlavePartition::ResetReplication(uint32_t master_term, const std::string& reason) {
+  std::string info_file_path;
+  auto s = GetInfoFilePath(&info_file_path);
+  if (!s.ok()) {
+    LOG(WARNING) << reason << ", can't get info_file_path, err: " << s.ToString();
+    return s;
+  }
+  return CASReplState(std::vector<ReplState>{ReplState::kConnected, ReplState::kWaitDBSync},
+                      master_term,
+                      [this, info_file_path, reason]()->Status{ return this->ResetMasterUnsafe(info_file_path, reason); },
+                      ReplState::kTryConnect,
+                      reason);
+}
+
+Status SyncSlavePartition::GetInfoFilePath(std::string* info_file_path) {
+  std::shared_ptr<Partition> table_partition = g_pika_server->GetTablePartitionById(partition_info_.table_name_, partition_info_.partition_id_);
+  if (!table_partition) {
+    std::stringstream ss;
+    ss << "Partition " << partition_info_.ToString() << " not found";
+    return Status::Corruption(ss.str());
+  }
+  *info_file_path = table_partition->GetDBSyncTermInfoFile();
   return Status::OK();
 }
 
@@ -855,12 +863,11 @@ Status SyncSlavePartition::Activate(const RmNode& master, const ReplState& repl_
     return Status::Corruption(ss.str());
   }
 
-  Status ret = SetMasterUnsafe(master, info_file_path);
+  Status ret = SetMasterUnsafe(master, info_file_path, "Activate Replication");
   if (!ret.ok()) {
     return ret;
   }
   SetReplStateUnsafe(repl_state);
-  m_info_.SetLastRecvTime(slash::NowMicros());
   return Status::OK();
 }
 

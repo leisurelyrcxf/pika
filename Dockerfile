@@ -27,7 +27,7 @@ RUN rpm -ivh https://mirrors.ustc.edu.cn/epel/epel-release-latest-7.noarch.rpm &
 RUN make distclean
 RUN make clean
 RUN cd third/pink/pink/third/slash/slash && make clean && cd -
-RUN make && cp -r ${PIKA_BUILD_DIR}/output ${PIKA}
+RUN make -j5 && cp -r ${PIKA_BUILD_DIR}/output ${PIKA}
 RUN yum -y remove gcc-c++ && \
     yum -y remove make && \
     yum -y remove which && \

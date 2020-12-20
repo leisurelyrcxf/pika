@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <glog/logging.h>
 #include <sys/resource.h>
+#include <include/build_version.h>
 
 #include "slash/include/env.h"
 #include "include/pika_rm.h"
@@ -31,6 +32,7 @@ static void version() {
     snprintf(version, sizeof(version), "%d.%d.%d", PIKA_MAJOR,
         PIKA_MINOR, PIKA_PATCH);
     printf("-----------Pika server %s ----------\n", version);
+    printf("%s\n", pika_build_git_sha);
 }
 
 static void PikaConfInit(const std::string& path) {

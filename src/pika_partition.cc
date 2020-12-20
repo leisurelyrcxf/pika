@@ -355,11 +355,9 @@ bool Partition::TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_
     LOG(WARNING) << "Partition: " << partition_name_ << ", delete info file '" << info_path << "' failed: " << deleteRet.ToString();
     return false;
   }
-  ReplState current_state = ReplState::kWaitDBSync;
-  uint32_t current_master_term = master_term;
   return slave_partition->CASReplState(
-    std::vector<ReplState>{ReplState::kWaitDBSync}, &current_state,
-    master_term, &current_master_term,
+    std::vector<ReplState>{ReplState::kWaitDBSync},
+    master_term,
     [this, slave_partition, dbsync_path, filenum, offset, master_ip, master_port, onDbChanged]() -> Status {
       // Check address, this is unnecessary actually because we already checked term.
       if (master_ip != slave_partition->MasterIpUnsafe()
@@ -369,6 +367,7 @@ bool Partition::TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_
            << " Error master node ip port: " << master_ip << ":" << master_port << ", latest: "
            << slave_partition->MasterIpUnsafe() << ":" << slave_partition->MasterPortUnsafe();
         LOG(WARNING) << ss.str();
+        slave_partition->SetReplStateUnsafe(ReplState::kError);
         return Status::Corruption(ss.str());
       }
 
@@ -377,9 +376,11 @@ bool Partition::TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_
                 << ", master_port: " << master_port
                 << ", filenum: " << filenum
                 << ", offset: " << offset;
-      if (!ChangeDb(dbsync_path, onDbChanged)) {
+
+      if (!this->ChangeDb(dbsync_path, onDbChanged)) {
         LOG(WARNING) << "Partition: " << partition_name_
                      << ", Failed to change db";
+        slave_partition->SetReplStateUnsafe(ReplState::kError);
         return Status::Corruption("failed to change db");
       }
       // Update master offset

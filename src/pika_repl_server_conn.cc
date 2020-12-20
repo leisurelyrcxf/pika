@@ -71,6 +71,7 @@ void PikaReplServerConn::HandleMetaSyncRequest(void* arg) {
   }
   conn->NotifyWrite();
   delete task_arg;
+  LOG(INFO) << "Write MetaSync response successfully";
 }
 
 void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
@@ -192,7 +193,7 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
       } else {
         try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kOk);
         try_sync_response->set_session_id(session_id);
-        LOG(INFO) << "Partition: " << partition_name << " TrySync Success, Session: " << session_id;
+        LOG(INFO) << "Partition: " << partition_name << " TrySync Success, Prev Session: " << session_id;
       }
     }
   }
@@ -207,6 +208,7 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
   }
   conn->NotifyWrite();
   delete task_arg;
+  LOG(INFO) << "Write TrySync response successfully";
 }
 
 
@@ -288,6 +290,7 @@ void PikaReplServerConn::HandleDBSyncRequest(void* arg) {
   }
   conn->NotifyWrite();
   delete task_arg;
+  LOG(INFO) << "Write DBSync response successfully";
 }
 
 void PikaReplServerConn::HandleBinlogSyncRequest(void* arg) {
@@ -411,6 +414,7 @@ void PikaReplServerConn::HandleRemoveSlaveNodeRequest(void* arg) {
   }
   conn->NotifyWrite();
   delete task_arg;
+  LOG(INFO) << "Write Remove Slave Node response successfully";
 }
 
 int PikaReplServerConn::DealMessage() {

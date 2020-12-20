@@ -225,7 +225,11 @@ void PikaReplClientConn::HandleTrySyncResponse(void* arg) {
     slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kError, ss.str());
   } else if (try_sync_response.reply_code() == InnerMessage::InnerResponse::TrySync::kError) {
     std::stringstream ss;
-    ss << "Partition: " << partition_name << " TrySync Error";
+    ss << "Partition: " << partition_name << " TrySync Error: recv kError";
+    slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kError, ss.str());
+  } else {
+    std::stringstream ss;
+    ss << "Partition: " << partition_name << " TrySync Code Invalid: " << try_sync_response.reply_code();
     slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kError, ss.str());
   }
   delete task_arg;
