@@ -152,8 +152,13 @@ Status SyncMasterPartition::AddSlaveNode(const std::string& ip, int port, uint32
   slash::MutexLock l(&partition_mu_);
   for (auto& slave : slaves_) {
     if (ip == slave->Ip() && port == slave->Port()) {
-      slave->SetSessionId(session_id);
-      return Status::OK();
+      if (partition_id == slave->PartitionId()) {
+        slave->SetSessionId(session_id);
+        return Status::OK();
+      }
+      std::stringstream ss;
+      ss << "multi partitions from same slave pika, wanna add " << partition_id << " but already exist " << slave->PartitionId();
+      return Status::Corruption(ss.str());
     }
   }
   std::shared_ptr<SlaveNode> slave_ptr =
@@ -161,7 +166,7 @@ Status SyncMasterPartition::AddSlaveNode(const std::string& ip, int port, uint32
   slave_ptr->SetLastSendTime(slash::NowMicros());
   slave_ptr->SetLastRecvTime(slash::NowMicros());
   slaves_.push_back(slave_ptr);
-  LOG(INFO) << "Add Slave Node, partition: " << SyncPartitionInfo().ToString() << ", ip_port: "<< ip << ":" << port;
+  LOG(INFO) << "Add Slave Node, partition: " << slave_ptr->NodePartitionInfo().ToString() << ", ip_port: "<< ip << ":" << port;
   return Status::OK();
 }
 
@@ -171,7 +176,7 @@ Status SyncMasterPartition::RemoveSlaveNode(const std::string& ip, int port) {
     std::shared_ptr<SlaveNode> slave = slaves_[i];
     if (ip == slave->Ip() && port == slave->Port()) {
       slaves_.erase(slaves_.begin() + i);
-      LOG(INFO) << "Remove Slave Node, Partition: " << SyncPartitionInfo().ToString()
+      LOG(INFO) << "Remove Slave Node, Partition: " <<  slave->NodePartitionInfo().ToString()
         << ", ip_port: "<< ip << ":" << port;
       return Status::OK();
     }
@@ -526,9 +531,10 @@ Status SyncMasterPartition::CheckSyncTimeout(uint64_t now) {
   }
   for (auto& node : to_del) {
     for (size_t i = 0; i < slaves_.size(); ++i) {
-      if (node.Ip() == slaves_[i]->Ip() && node.Port() == slaves_[i]->Port()) {
+      auto slave = slaves_[i];
+      if (node.Ip() == slave->Ip() && node.Port() == slave->Port()) {
         slaves_.erase(slaves_.begin() + i);
-        LOG(WARNING) << SyncPartitionInfo().ToString() << " Master del Recv Timeout slave success " << node.ToString();
+        LOG(WARNING) << slave->NodePartitionInfo().ToString() << " Master del Recv Timeout slave success " << node.ToString();
         break;
       }
     }
@@ -570,6 +576,7 @@ Status SyncMasterPartition::GetInfo(std::string* info) {
     slash::MutexLock l(&slave_ptr->slave_mu);
     tmp_stream << "  slave[" << i << "]: "
       << slave_ptr->Ip()  << ":" << std::to_string(slave_ptr->Port()) << "\r\n";
+    tmp_stream << " partition_id: " << slave_ptr->PartitionId() << "\r\n";
     tmp_stream << "  replication_status: " << SlaveStateMsg[slave_ptr->slave_state] << "\r\n";
     if (slave_ptr->slave_state == kSlaveBinlogSync) {
       std::shared_ptr<Partition> partition = g_pika_server->GetTablePartitionById(slave_ptr->TableName(), slave_ptr->PartitionId());
@@ -946,7 +953,7 @@ bool PikaReplicaManager::CheckSlaveDBConnect() {
   std::shared_ptr<SyncSlavePartition> partition = nullptr;
   for (auto iter : g_pika_rm->sync_slave_partitions_) {
     partition = iter.second;
-    if (partition->State() == ReplState::kDBNoConnect) { 
+    if (partition->State() == ReplState::kDBNoConnect) {
       LOG(INFO) << "DB: " << partition->SyncPartitionInfo().ToString()
         << " has been dbslaveof no one, then will not try reconnect.";
       return false;
@@ -1519,8 +1526,8 @@ Status PikaReplicaManager::RunSyncSlavePartitionStateMachine() {
           });
         } else {
           (void) partition->TryUpdateMasterOffset([partition](std::shared_ptr<blackwidow::BlackWidow> db)->rocksdb::Status {
-            return db->RemoveKeys(blackwidow::DataType::kAll, [partition](const rocksdb::Slice& key)->bool {
-              return partition != g_pika_server->GetTablePartitionByKey(partition->GetTableName(), key.ToString(false));
+            return db->RemoveKeys(blackwidow::DataType::kAll, [partition](const std::string& pika_key)->bool {
+              return partition != g_pika_server->GetTablePartitionByKey(partition->GetTableName(), pika_key);
             });
           });
         }
