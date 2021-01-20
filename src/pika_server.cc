@@ -24,6 +24,7 @@
 #include "include/pika_server.h"
 #include "include/pika_dispatch_thread.h"
 #include "include/pika_cmd_table_manager.h"
+#include "include/pika_utils.h"
 
 extern PikaServer* g_pika_server;
 extern PikaReplicaManager* g_pika_rm;
@@ -38,10 +39,15 @@ void DoPurgeDir(void* arg) {
 }
 
 void DoDBSync(void* arg) {
-  DBSyncArg* dbsa = reinterpret_cast<DBSyncArg*>(arg);
+  auto* dbsa = reinterpret_cast<DBSyncArg*>(arg);
+  if (dbsa->bg_save_ret && !dbsa->bg_save_ret->load()) {
+    LOG(WARNING) << "bg save task " << dbsa->ip << ":" << dbsa->port << " " << dbsa->table_name << ":" << dbsa->partition_id << " failed, skip db sync";
+    delete dbsa;
+    return;
+  }
   PikaServer* const ps = dbsa->p;
   ps->DbSyncSendFile(dbsa->ip, dbsa->port,
-          dbsa->table_name, dbsa->partition_id);
+          dbsa->table_name, dbsa->partition_id, dbsa->master_term);
   delete dbsa;
 }
 
@@ -395,6 +401,12 @@ void PikaServer::InitTableStruct() {
     table_ptr->AddPartitions(table.partition_ids);
     tables_.emplace(name, table_ptr);
   }
+
+  Status s = g_pika_rm->InitSlaveSyncPartitionsMasterTerm();
+  if (!s.ok()) {
+    LOG(FATAL) << "can't init slave sync partition master term" << s.ToString();
+    exit(1);
+  }
 }
 
 std::shared_ptr<Table> PikaServer::GetTable(const std::string &table_name) {
@@ -668,7 +680,11 @@ void PikaServer::DeleteSlave(int fd) {
 
 int32_t PikaServer::CountSyncSlaves() {
   slash::MutexLock ldb(&db_sync_protector_);
-  return db_sync_slaves_.size();
+  std::unordered_set<std::string> same_key_slaves;
+  for (auto& slave : db_sync_slaves_) {
+    same_key_slaves.insert(ExcludeDbSyncTaskIndexMasterTerm(slave));
+  }
+  return same_key_slaves.size();
 }
 
 int32_t PikaServer::GetShardingSlaveListString(std::string& slave_list_str) {
@@ -850,7 +866,7 @@ bool PikaServer::LoopPartitionStateMachine() {
 
 void PikaServer::SetLoopPartitionStateMachine(bool need_loop) {
   slash::RWLock sp_l(&state_protector_, true);
-  assert(repl_state_ == PIKA_REPL_META_SYNC_DONE);
+//  assert(repl_state_ == PIKA_REPL_META_SYNC_DONE);
   loop_partition_state_machine_ = need_loop;
 }
 
@@ -880,10 +896,11 @@ void PikaServer::PurgeDirTaskSchedule(void (*function)(void*), void* arg) {
 
 void PikaServer::DBSync(const std::string& ip, int port,
                         const std::string& table_name,
-                        uint32_t partition_id) {
+                        uint32_t partition_id, uint32_t master_term,
+                        std::shared_ptr<std::atomic<bool>> bg_save_ret) {
   {
     std::string task_index =
-      DbSyncTaskIndex(ip, port, table_name, partition_id);
+      DbSyncTaskIndex(RmNode(ip, port, table_name, partition_id), master_term);
     slash::MutexLock ml(&db_sync_protector_);
     if (db_sync_slaves_.find(task_index) != db_sync_slaves_.end()) {
       return;
@@ -892,35 +909,44 @@ void PikaServer::DBSync(const std::string& ip, int port,
   }
   // Reuse the bgsave_thread_
   // Since we expect BgSave and DBSync execute serially
-  bgsave_thread_.StartThread();
-  DBSyncArg* arg = new DBSyncArg(this, ip, port, table_name, partition_id);
-  bgsave_thread_.Schedule(&DoDBSync, reinterpret_cast<void*>(arg));
+  BGSaveTaskSchedule(&DoDBSync,
+                     new DBSyncArg(this, ip, port, table_name, partition_id, master_term, std::move(bg_save_ret)));
 }
 
-void PikaServer::TryDBSync(const std::string& ip, int port,
+Status PikaServer::TryDBSync(const std::string& ip, int port,
                            const std::string& table_name,
-                           uint32_t partition_id, int32_t top) {
+                           uint32_t partition_id, int32_t top, uint32_t master_term) {
   std::shared_ptr<Partition> partition =
     GetTablePartitionById(table_name, partition_id);
   if (!partition) {
     LOG(WARNING) << "Partition: " << partition->GetPartitionName()
       << " Not Found, TryDBSync Failed";
+    return Status::Corruption("partition " + partition->GetPartitionName() + " not found");
   } else {
     BgSaveInfo bgsave_info = partition->bgsave_info();
     std::string logger_filename = partition->logger()->filename;
+    std::shared_ptr<std::atomic<bool>> bg_save_ret;
     if (slash::IsDir(bgsave_info.path) != 0
       || !slash::FileExists(NewFileName(logger_filename, bgsave_info.filenum))
       || top - bgsave_info.filenum > kDBSyncMaxGap) {
       // Need Bgsave first
-      partition->BgSavePartition();
+      bg_save_ret = partition->BgSavePartition();
     }
-    DBSync(ip, port, table_name, partition_id);
+    DBSync(ip, port, table_name, partition_id, master_term, bg_save_ret);
+    return Status::OK();
   }
 }
 
 void PikaServer::DbSyncSendFile(const std::string& ip, int port,
                                 const std::string& table_name,
-                                uint32_t partition_id) {
+                                uint32_t partition_id, uint32_t master_term) {
+  Cleaner cleaner([=]() {
+    // remove slave
+    std::string task_index = DbSyncTaskIndex(RmNode(ip, port, table_name, partition_id), master_term);
+    slash::MutexLock ml(&db_sync_protector_);
+    db_sync_slaves_.erase(task_index);
+  });
+
   std::shared_ptr<Partition> partition = GetTablePartitionById(table_name, partition_id);
   if (!partition) {
     LOG(WARNING) << "Partition: " << partition->GetPartitionName()
@@ -936,8 +962,7 @@ void PikaServer::DbSyncSendFile(const std::string& ip, int port,
   // Get all files need to send
   std::vector<std::string> descendant;
   int ret = 0;
-  LOG(INFO) << "Partition: " << partition->GetPartitionName()
-    << " Start Send files in " << bg_path << " to " << ip;
+
   ret = slash::GetChildren(bg_path, descendant);
   if (ret != 0) {
     std::string ip_port = slash::IpPortString(ip, port);
@@ -948,19 +973,20 @@ void PikaServer::DbSyncSendFile(const std::string& ip, int port,
     return;
   }
 
-  std::string local_path, target_path;
-  std::string remote_path = g_pika_conf->classic_mode() ? table_name : table_name + "/" + std::to_string(partition_id);
-  std::vector<std::string>::const_iterator iter = descendant.begin();
+  std::string remote_path = g_pika_conf->classic_mode() ? table_name :
+      table_name + "/" + std::to_string(partition_id) + "/" + Partition::GenTermDesc(master_term);
+  LOG(INFO) << "Partition: " << partition->GetPartitionName()
+            << " Start Send files in " << bg_path << " to "
+            << ip << "(" << port << ")" << ":" << remote_path;
   slash::RsyncRemote remote(ip, port, kDBSyncModule, g_pika_conf->db_sync_speed() * 1024);
   std::string secret_file_path = g_pika_conf->db_sync_path();
   if (g_pika_conf->db_sync_path().back() != '/') {
     secret_file_path += "/";
   }
   secret_file_path += slash::kRsyncSubDir + "/" + kPikaSecretFile;
-
-  for (; iter != descendant.end(); ++iter) {
-    local_path = bg_path + "/" + *iter;
-    target_path = remote_path + "/" + *iter;
+  for (auto iter = descendant.begin(); iter != descendant.end(); ++iter) {
+    std::string local_path = bg_path + "/" + *iter;
+    std::string target_path = remote_path + "/" + *iter;
 
     if (*iter == kBgsaveInfoFile) {
       continue;
@@ -980,9 +1006,10 @@ void PikaServer::DbSyncSendFile(const std::string& ip, int port,
         << ", To: " << target_path
         << ", At: " << ip << ":" << port
         << ", Error: " << ret;
-      break;
+      return;
     }
   }
+
   // Clear target path
   slash::RsyncSendClearTarget(bg_path + "/strings", remote_path + "/strings", secret_file_path, remote);
   slash::RsyncSendClearTarget(bg_path + "/hashes", remote_path + "/hashes", secret_file_path, remote);
@@ -1015,22 +1042,18 @@ void PikaServer::DbSyncSendFile(const std::string& ip, int port,
       if (fix.is_open()) {
         fix << "0s\n" << lip << "\n" << port_ << "\n" << binlog_filenum << "\n" << binlog_offset << "\n";
         fix.close();
-      }
-      ret = slash::RsyncSendFile(fn, remote_path + "/" + kBgsaveInfoFile, secret_file_path, remote);
-      slash::DeleteFile(fn);
-      if (ret != 0) {
-        LOG(WARNING) << "Partition: " << partition->GetPartitionName() << " Send Modified Info File Failed";
+        ret = slash::RsyncSendFile(fn, remote_path + "/" + kBgsaveInfoFile, secret_file_path, remote);
+        slash::DeleteFile(fn);
+        if (ret != 0) {
+          LOG(WARNING) << "Partition: " << partition->GetPartitionName() << " Send Modified Info File Failed";
+        }
+      } else {
+        LOG(WARNING) << "can't open info file '" << fn << "'";
+        ret = 1;
       }
     } else if (0 != (ret = slash::RsyncSendFile(bg_path + "/" + kBgsaveInfoFile, remote_path + "/" + kBgsaveInfoFile, secret_file_path, remote))) {
       LOG(WARNING) << "Partition: " << partition->GetPartitionName() << " Send Info File Failed";
     }
-  }
-  // remove slave
-  {
-    std::string task_index =
-      DbSyncTaskIndex(ip, port, table_name, partition_id);
-    slash::MutexLock ml(&db_sync_protector_);
-    db_sync_slaves_.erase(task_index);
   }
 
   if (0 == ret) {
@@ -1038,14 +1061,19 @@ void PikaServer::DbSyncSendFile(const std::string& ip, int port,
   }
 }
 
-std::string PikaServer::DbSyncTaskIndex(const std::string& ip,
-                                        int port,
-                                        const std::string& table_name,
-                                        uint32_t partition_id) {
+std::string PikaServer::DbSyncTaskIndex(const RmNode& slave, uint32_t master_term) {
   char buf[256];
-  snprintf(buf, sizeof(buf), "%s:%d_%s:%d",
-      ip.data(), port, table_name.data(), partition_id);
+  snprintf(buf, sizeof(buf), "%s:%d_%s:%d:%d",
+           slave.Ip().data(), slave.Port(), slave.TableName().data(), slave.PartitionId(), master_term);
   return buf;
+}
+
+std::string PikaServer::ExcludeDbSyncTaskIndexMasterTerm(const std::string& task_index) {
+  size_t idx = task_index.rfind(':');
+  if (idx == std::string::npos) {
+    throw std::runtime_error("impossible code");
+  }
+  return task_index.substr(0, idx);
 }
 
 void PikaServer::KeyScanTaskSchedule(pink::TaskFunc func, void* arg) {
@@ -1122,12 +1150,12 @@ void PikaServer::SlowlogPushEntry(const PikaCmdArgsType& argv, int32_t time, int
 
   for (uint32_t idx = 0; idx < slargc; ++idx) {
     if (slargc != argv.size() && idx == slargc - 1) {
-      char buffer[32];
+      char buffer[64];
       sprintf(buffer, "... (%lu more arguments)", argv.size() - slargc + 1);
       entry.argv.push_back(std::string(buffer));
     } else {
       if (argv[idx].size() > SLOWLOG_ENTRY_MAX_STRING) {
-        char buffer[32];
+        char buffer[64];
         sprintf(buffer, "... (%lu more bytes)", argv[idx].size() - SLOWLOG_ENTRY_MAX_STRING);
         std::string suffix(buffer);
         std::string brief = argv[idx].substr(0, SLOWLOG_ENTRY_MAX_STRING);

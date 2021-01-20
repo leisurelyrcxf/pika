@@ -150,6 +150,7 @@ void PikaReplClientConn::HandleDBSyncResponse(void* arg) {
   const InnerMessage::Partition partition_response = db_sync_response.partition();
   std::string table_name = partition_response.table_name();
   uint32_t partition_id  = partition_response.partition_id();
+  const uint32_t master_term = partition_response.master_term();
 
   std::shared_ptr<SyncSlavePartition> slave_partition =
       g_pika_rm->GetSyncSlavePartitionByName(
@@ -161,9 +162,8 @@ void PikaReplClientConn::HandleDBSyncResponse(void* arg) {
   }
 
   if (response->code() != InnerMessage::kOk) {
-    slave_partition->SetReplState(ReplState::kError);
     std::string reply = response->has_reply() ? response->reply() : "";
-    LOG(WARNING) << "DBSync Failed: " << reply;
+    slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kError, "DBSync Failed: " + reply);
     delete task_arg;
     return;
   }
@@ -172,8 +172,7 @@ void PikaReplClientConn::HandleDBSyncResponse(void* arg) {
           PartitionInfo(table_name, partition_id), session_id);
 
   std::string partition_name = slave_partition->SyncPartitionInfo().ToString();
-  slave_partition->SetReplState(ReplState::kWaitDBSync);
-  LOG(INFO) << "Partition: " << partition_name << " Need Wait To Sync";
+  slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kWaitDBSync, "recv dbsync kOk response");
   delete task_arg;
 }
 
@@ -191,8 +190,9 @@ void PikaReplClientConn::HandleTrySyncResponse(void* arg) {
 
   const InnerMessage::InnerResponse_TrySync& try_sync_response = response->try_sync();
   const InnerMessage::Partition& partition_response = try_sync_response.partition();
-  std::string table_name = partition_response.table_name();
+  const std::string& table_name = partition_response.table_name();
   uint32_t partition_id  = partition_response.partition_id();
+  const uint32_t master_term = partition_response.master_term();
   std::shared_ptr<Partition> partition = g_pika_server->GetTablePartitionById(table_name, partition_id);
   if (!partition) {
     LOG(WARNING) << "Partition: " << table_name << ":" << partition_id << " Not Found";
@@ -216,17 +216,21 @@ void PikaReplClientConn::HandleTrySyncResponse(void* arg) {
     partition->logger()->GetProducerStatus(&boffset.filenum, &boffset.offset);
     g_pika_rm->UpdateSyncSlavePartitionSessionId(PartitionInfo(table_name, partition_id), session_id);
     g_pika_rm->SendPartitionBinlogSyncAckRequest(table_name, partition_id, boffset, boffset, true);
-    slave_partition->SetReplState(ReplState::kConnected);
-    LOG(INFO)    << "Partition: " << partition_name << " TrySync Ok";
+    slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kConnected, "recv try sync response: kOK");
   } else if (try_sync_response.reply_code() == InnerMessage::InnerResponse::TrySync::kSyncPointBePurged) {
-    slave_partition->SetReplState(ReplState::kTryDBSync);
-    LOG(INFO)    << "Partition: " << partition_name << " Need To Try DBSync";
+    slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kTryDBSync, "recv try sync response: kSyncPointBePurged");
   } else if (try_sync_response.reply_code() == InnerMessage::InnerResponse::TrySync::kSyncPointLarger) {
-    slave_partition->SetReplState(ReplState::kError);
-    LOG(WARNING) << "Partition: " << partition_name << " TrySync Error, Because the invalid filenum and offset";
+    std::stringstream ss;
+    ss << "Partition: " << partition_name << " TrySync Error, Because the invalid filenum and offset";
+    slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kError, ss.str());
   } else if (try_sync_response.reply_code() == InnerMessage::InnerResponse::TrySync::kError) {
-    slave_partition->SetReplState(ReplState::kError);
-    LOG(WARNING) << "Partition: " << partition_name << " TrySync Error";
+    std::stringstream ss;
+    ss << "Partition: " << partition_name << " TrySync Error: recv kError";
+    slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kError, ss.str());
+  } else {
+    std::stringstream ss;
+    ss << "Partition: " << partition_name << " TrySync Code Invalid: " << try_sync_response.reply_code();
+    slave_partition->CASReplState(ReplState::kWaitReply, master_term, ReplState::kError, ss.str());
   }
   delete task_arg;
 }

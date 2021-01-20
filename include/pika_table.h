@@ -83,6 +83,7 @@ class Table : public std::enable_shared_from_this<Table>{
 struct BgTaskArg {
   std::shared_ptr<Table> table;
   std::shared_ptr<Partition> partition;
+  std::shared_ptr<std::atomic<bool>> success;
 };
 
 

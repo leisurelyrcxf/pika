@@ -23,15 +23,17 @@ RUN rpm -ivh https://mirrors.ustc.edu.cn/epel/epel-release-latest-7.noarch.rpm &
     yum -y install gcc-c++ && \
     yum -y install make && \
     yum -y install which && \
-    yum -y install git && \
-    make && \
-    cp -r ${PIKA_BUILD_DIR}/output ${PIKA} && \
-    yum -y remove gcc-c++ && \
+    yum -y install git
+RUN make distclean
+RUN make clean
+RUN cd third/pink/pink/third/slash/slash && make clean && cd -
+RUN make -j5 && cp -r ${PIKA_BUILD_DIR}/output ${PIKA}
+RUN yum -y remove gcc-c++ && \
     yum -y remove make && \
     yum -y remove which && \
     yum -y remove git && \
-    yum -y clean all && \
-    rm -rf /var/cache/yum && \
+    yum -y clean all
+RUN rm -rf /var/cache/yum && \
     rm -rf .git && \
     rm -rf ${PIKA_BUILD_DIR}
 

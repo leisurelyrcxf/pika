@@ -27,6 +27,7 @@ message Node {
 message Partition {
   required string table_name   = 1;
   required uint32 partition_id = 2;
+  required uint32 master_term  = 3;
 }
 
 message TableInfo {

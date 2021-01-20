@@ -7,6 +7,8 @@
 #define PIKA_DEFINE_H_
 
 #include <set>
+#include <memory>
+#include <atomic>
 #include <glog/logging.h>
 
 #include "pink/include/redis_cli.h"
@@ -124,13 +126,17 @@ struct DBSyncArg {
   int port;
   std::string table_name;
   uint32_t partition_id;
+  uint32_t master_term;
+  std::shared_ptr<std::atomic<bool>> bg_save_ret;
   DBSyncArg(PikaServer* const _p,
             const std::string& _ip,
             int _port,
             const std::string& _table_name,
-            uint32_t _partition_id)
+            uint32_t _partition_id,
+            uint32_t _master_term,
+            std::shared_ptr<std::atomic<bool>> _bg_save_ret)
       : p(_p), ip(_ip), port(_port),
-        table_name(_table_name), partition_id(_partition_id) {}
+        table_name(_table_name), partition_id(_partition_id), master_term(_master_term), bg_save_ret(std::move(_bg_save_ret)) {}
 };
 
 // rm define
@@ -289,6 +295,16 @@ class RmNode : public Node {
     return false;
   }
 
+  std::string GetPartitionName() const {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "(%s:%u)", partition_info_.table_name_.c_str(), partition_info_.partition_id_);
+    return std::string(buf);
+  }
+
+  std::string GetAddr() const {
+    return Ip() + ":" + std::to_string(Port());
+  }
+
   const std::string& TableName() const {
     return partition_info_.table_name_;
   }
@@ -334,9 +350,10 @@ struct hash_rm_node {
 };
 
 struct WriteTask {
-  struct RmNode rm_node_;
+  class RmNode rm_node_;
+  uint32_t slave_master_term_;
   struct BinlogChip binlog_chip_;
-  WriteTask(RmNode rm_node, BinlogChip binlog_chip) : rm_node_(rm_node), binlog_chip_(binlog_chip) {
+  WriteTask(RmNode rm_node, uint32_t slave_master_term, BinlogChip binlog_chip) : rm_node_(rm_node), slave_master_term_(slave_master_term), binlog_chip_(binlog_chip) {
   }
 };
 

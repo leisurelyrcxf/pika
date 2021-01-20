@@ -32,7 +32,7 @@ struct KeyScanInfo {
   }
 };
 
-
+struct BgTaskArg;
 struct BgSaveInfo {
   bool bgsaving;
   time_t start_time;
@@ -40,12 +40,14 @@ struct BgSaveInfo {
   std::string path;
   uint32_t filenum;
   uint64_t offset;
+  BgTaskArg* current_bg_task;
   BgSaveInfo() : bgsaving(false), filenum(0), offset(0) {}
   void Clear() {
     bgsaving = false;
     path.clear();
     filenum = 0;
     offset = 0;
+    current_bg_task = nullptr;
   }
 };
 
@@ -78,7 +80,7 @@ class Partition : public std::enable_shared_from_this<Partition> {
   bool GetBinlogOffset(BinlogOffset* const boffset);
   bool SetBinlogOffset(const BinlogOffset& boffset);
 
-  void PrepareRsync();
+  bool PrepareRsync(uint32_t term);
   bool TryUpdateMasterOffset(std::function<rocksdb::Status(std::shared_ptr<blackwidow::BlackWidow> db)> onDbChanged);
   bool ChangeDb(const std::string& new_path, std::function<rocksdb::Status(std::shared_ptr<blackwidow::BlackWidow> db)> onDbChanged);
 
@@ -88,7 +90,7 @@ class Partition : public std::enable_shared_from_this<Partition> {
 
   // BgSave use;
   bool IsBgSaving();
-  void BgSavePartition();
+  std::shared_ptr<std::atomic<bool>> BgSavePartition();
   BgSaveInfo bgsave_info();
 
   // FlushDB & FlushSubDB use
@@ -102,6 +104,11 @@ class Partition : public std::enable_shared_from_this<Partition> {
   // key scan info use
   Status GetKeyNum(std::vector<blackwidow::KeyInfo>* key_info);
   KeyScanInfo GetKeyScanInfo();
+  Status GetMasterTerm(uint32_t * master_term);
+  std::string GenDBSyncPath(uint32_t master_term) { return dbsync_path_base_ + GenTermDesc(master_term) + "/"; }
+  std::string GetDBSyncTermInfoFile() { return dbsync_path_base_ + DBSYNC_TERM_INFO_FILE_NAME; }
+  static std::string GenTermDesc(uint32_t master_term) { return "term_" + std::to_string(master_term); }
+  static const char* DBSYNC_TERM_INFO_FILE_NAME;
 
  private:
   std::string table_name_;
@@ -110,7 +117,7 @@ class Partition : public std::enable_shared_from_this<Partition> {
   std::string db_path_;
   std::string log_path_;
   std::string bgsave_sub_path_;
-  std::string dbsync_path_;
+  std::string dbsync_path_base_;
   std::string partition_name_;
 
   bool opened_;
@@ -130,6 +137,7 @@ class Partition : public std::enable_shared_from_this<Partition> {
    * BgSave use
    */
   static void DoBgSave(void* arg);
+  void RemoveOldTerms();
   bool RunBgsaveEngine();
   bool InitBgsaveEnv();
   bool InitBgsaveEngine();
